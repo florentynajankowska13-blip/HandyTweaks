@@ -54,13 +54,10 @@ namespace HandyTweaks
                         {
                             if (c.pCurrentStage._Name == "NoInteraction")
                             {
-                                if (AutoSpendFarmGems)
-                                {
-                                    if (c.CheckGemsAvailable(c.GetSpeedupCost()))
-                                        c.GotoNextStage(true);
-                                }
-                                else if (BypassFarmGemCosts)
+                                if (BypassFarmGemCosts)
                                     c.GotoNextStage();
+                                else if (AutoSpendFarmGems && c.CheckGemsAvailable(c.GetSpeedupCost()))
+                                    c.GotoNextStage(true);
                             }
                             else
                                 c.GotoNextStage();
@@ -89,13 +86,10 @@ namespace HandyTweaks
                                 a.GotoNextStage(false);
                             else
                             {
-                                if (AutoSpendFarmGems)
-                                {
-                                    if (a.CheckGemsAvailable(a.GetSpeedupCost()))
-                                        a.GotoNextStage(true);
-                                }
-                                else if (BypassFarmGemCosts)
+                                if (BypassFarmGemCosts)
                                     a.GotoNextStage();
+                                else if (AutoSpendFarmGems && a.CheckGemsAvailable(a.GetSpeedupCost()))
+                                    a.GotoNextStage(true);
                             }
                         }
                         else if (i is ComposterFarmItem d)

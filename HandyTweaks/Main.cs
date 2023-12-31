@@ -14,7 +14,7 @@ using Object = UnityEngine.Object;
 
 namespace HandyTweaks
 {
-    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.0.0")]
+    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.0.1")]
     [BepInDependency("com.aidanamite.ConfigTweaks")]
     public class Main : BaseUnityPlugin
     {
@@ -34,6 +34,8 @@ namespace HandyTweaks
         public static KeyCode DontApplyGeometry = KeyCode.LeftShift;
         [ConfigField]
         public static KeyCode DontApplyTextures = KeyCode.LeftAlt;
+        [ConfigField]
+        public static bool SortStableQuestDragonsByValue = false;
 
         public void Awake()
         {
@@ -163,6 +165,8 @@ namespace HandyTweaks
         public static bool IsWaitingForWsCall(this FarmItem item) => (bool)_mIsWaitingForWsCall.GetValue(item);
         static MethodInfo _SaveAndExitQuiz = typeof(UiQuizPopupDB).GetMethod("SaveAndExitQuiz", ~BindingFlags.Default);
         public static void SaveAndExitQuiz(this UiQuizPopupDB item) => _SaveAndExitQuiz.Invoke(item, new object[0]);
+        static MethodInfo _CreateDragonWiget = typeof(UiStableQuestDragonsMenu).GetMethod("CreateDragonWiget", ~BindingFlags.Default);
+        public static void CreateDragonWiget(this UiStableQuestDragonsMenu menu, RaisedPetData rpData) => _CreateDragonWiget.Invoke(menu, new object[] { rpData });
     }
 
     [HarmonyPatch(typeof(UiMyRoomBuilder), "Update")]
@@ -223,5 +227,37 @@ namespace HandyTweaks
     static class Patch_ApplyGeometry
     {
         static bool Prefix() => !Input.GetKey(Main.DontApplyGeometry);
+    }
+
+    [HarmonyPatch(typeof(UiStableQuestDragonsMenu), "LoadDragonsList")]
+    static class Patch_LoadStableQuestDragonsList
+    {
+        static bool Prefix(UiStableQuestDragonsMenu __instance)
+        {
+            if (!Main.SortStableQuestDragonsByValue)
+                return true;
+            __instance.ClearItems();
+            
+            var l = new SortedSet<(float, RaisedPetData)>(new ComparePetValue());
+            if (RaisedPetData.pActivePets != null)
+                foreach (RaisedPetData[] array in RaisedPetData.pActivePets.Values)
+                    if (array != null)
+                        foreach (RaisedPetData pet in array)
+                            if (StableData.GetByPetID(pet.RaisedPetID) != null && pet.pStage >= RaisedPetStage.BABY && pet.IsPetCustomized())
+                                l.Add((TimedMissionManager.pInstance.GetWinProbabilityForPet(UiStableQuestMain.pInstance._StableQuestDetailsUI.pCurrentMissionData, pet.RaisedPetID),pet));
+            foreach (var p in l)
+                                __instance.CreateDragonWiget(p.Item2);
+            __instance.pMenuGrid.repositionNow = true;
+            return false;
+        }
+    }
+
+    class ComparePetValue : IComparer<(float, RaisedPetData)>
+    {
+        public int Compare((float, RaisedPetData) a, (float, RaisedPetData) b)
+        {
+            var c = b.Item1.CompareTo(a.Item1);
+            return c == 0 ? 1 : c;
+        }
     }
 }

@@ -14,7 +14,7 @@ using Object = UnityEngine.Object;
 
 namespace HandyTweaks
 {
-    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.0.1")]
+    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.0.2")]
     [BepInDependency("com.aidanamite.ConfigTweaks")]
     public class Main : BaseUnityPlugin
     {
@@ -49,8 +49,8 @@ namespace HandyTweaks
             if ((timer -= Time.deltaTime) <= 0 && (Input.GetKeyDown(DoFarmStuff) || DoFarmStuffOnTimer) && MyRoomsIntMain.pInstance is FarmManager f)
             {
                 timer = 0.2f;
-                foreach (var i in f.pFarmItems)
-                    if (i && i.pCurrentStage != null && !i.IsWaitingForWsCall())
+                foreach (var i in Resources.FindObjectsOfTypeAll<FarmItem>())
+                    if (i && i.isActiveAndEnabled && i.pCurrentStage != null && !i.IsWaitingForWsCall())
                     {
                         if (i is CropFarmItem c)
                         {

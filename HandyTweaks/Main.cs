@@ -14,7 +14,7 @@ using Object = UnityEngine.Object;
 
 namespace HandyTweaks
 {
-    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.0.5")]
+    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.0.6")]
     [BepInDependency("com.aidanamite.ConfigTweaks")]
     public class Main : BaseUnityPlugin
     {
@@ -546,6 +546,8 @@ namespace HandyTweaks
         [HarmonyPostfix]
         static void UiAvatarCustomization_ShowAvatarStats(UiAvatarCustomization __instance, UiStatPopUp ___mUiStats)
         {
+            if (!Main.ShowRacingEquipmentStats)
+                return;
             void Show(string name, string value)
             {
                 KAWidget kawidget = ___mUiStats.GetContentMenuCombat().AddWidget(___mUiStats.GetContentMenuCombat()._Template.name);

@@ -96,6 +96,7 @@
     <Reference Include="System" />
     <Reference Include="System.Data" />
     <Reference Include="System.Runtime.Serialization" />
+    <Reference Include="System.Xml" />
     <Reference Include="UnityEngine">
       <HintPath>D:\program\sod\DOMain_Data\Managed\UnityEngine.dll</HintPath>
       <Private>False</Private>
@@ -126,6 +127,10 @@
     </Reference>
     <Reference Include="UnityEngine.JSONSerializeModule">
       <HintPath>D:\program\sod\DOMain_Data\Managed\UnityEngine.JSONSerializeModule.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="UnityEngine.TextRenderingModule">
+      <HintPath>D:\program\sod\DOMain_Data\Managed\UnityEngine.TextRenderingModule.dll</HintPath>
       <Private>False</Private>
     </Reference>
     <Reference Include="UnityEngine.UI">

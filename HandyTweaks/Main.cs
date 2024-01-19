@@ -3,18 +3,21 @@ using ConfigTweaks;
 using HarmonyLib;
 using System;
 using System.Collections;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Net;
 using UnityEngine;
+using UnityEngine.UI;
 using Object = UnityEngine.Object;
 
 namespace HandyTweaks
 {
-    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.0.6")]
+    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.0.7")]
     [BepInDependency("com.aidanamite.ConfigTweaks")]
     public class Main : BaseUnityPlugin
     {
@@ -40,16 +43,200 @@ namespace HandyTweaks
         public static bool ShowRacingEquipmentStats = false;
         [ConfigField]
         public static KeyCode ChangeDragonsGender = KeyCode.Equals;
+        [ConfigField]
+        public static bool CheckForModUpdates = true;
+        [ConfigField]
+        public static int UpdateCheckTimeout = 60;
+        [ConfigField]
+        public static int MaxConcurrentUpdateChecks = 4;
 
+        public static Main instance;
+        static List<(BaseUnityPlugin, string)> updatesFound = new List<(BaseUnityPlugin, string)>();
+        static ConcurrentDictionary<WebRequest,bool> running = new ConcurrentDictionary<WebRequest, bool>();
+        static int currentActive;
+        static bool seenLogin = false;
+        static GameObject waitingUI;
+        static RectTransform textContainer;
+        static Text waitingText;
+        float waitingTime;
         public void Awake()
         {
+            instance = this;
+            if (CheckForModUpdates)
+            {
+                waitingUI = new GameObject("Waiting UI", typeof(RectTransform));
+                var c = waitingUI.AddComponent<Canvas>();
+                DontDestroyOnLoad(waitingUI);
+                c.renderMode = RenderMode.ScreenSpaceOverlay;
+                var s = c.gameObject.AddComponent<CanvasScaler>();
+                s.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+                s.screenMatchMode = CanvasScaler.ScreenMatchMode.MatchWidthOrHeight;
+                s.matchWidthOrHeight = 1;
+                s.referenceResolution = new Vector2(Screen.width, Screen.height);
+                var backing = new GameObject("back", typeof(RectTransform)).AddComponent<Image>();
+                backing.transform.SetParent(c.transform, false);
+                backing.color = Color.black;
+                backing.gameObject.layer = LayerMask.NameToLayer("UI");
+                waitingText = new GameObject("text", typeof(RectTransform)).AddComponent<Text>();
+                waitingText.transform.SetParent(backing.transform, false);
+                waitingText.text = "Checking for mod updates (??? remaining)";
+                waitingText.font = Font.CreateDynamicFontFromOSFont("Consolas", 100);
+                waitingText.fontSize = 25;
+                waitingText.color = Color.white;
+                waitingText.alignment = TextAnchor.MiddleCenter;
+                waitingText.material = new Material(Shader.Find("Unlit/Text"));
+                waitingText.gameObject.layer = LayerMask.NameToLayer("UI");
+                waitingText.supportRichText = true;
+                textContainer = backing.GetComponent<RectTransform>();
+                textContainer.anchorMin = new Vector2(0, 1);
+                textContainer.anchorMax = new Vector2(0, 1);
+                textContainer.offsetMin = new Vector2(0, -waitingText.preferredHeight - 40);
+                textContainer.offsetMax = new Vector2(waitingText.preferredWidth + 40, 0);
+                var tT = waitingText.GetComponent<RectTransform>();
+                tT.anchorMin = new Vector2(0, 0);
+                tT.anchorMax = new Vector2(1, 1);
+                tT.offsetMin = new Vector2(20, 20);
+                tT.offsetMax = new Vector2(-20, -20);
+                foreach (var plugin in Resources.FindObjectsOfTypeAll<BaseUnityPlugin>())
+                    CheckModVersion(plugin);
+            }
             new Harmony("com.aidanamite.HandyTweaks").PatchAll();
             Logger.LogInfo("Loaded");
+        }
+
+        [MethodImpl(MethodImplOptions.Synchronized)]
+        bool CanStartCheck()
+        {
+            if (currentActive < MaxConcurrentUpdateChecks)
+            {
+                currentActive++;
+                return true;
+            }
+            return false;
+        }
+        void CheckStopped() => currentActive--;
+        public async void CheckModVersion(BaseUnityPlugin plugin)
+        {
+            string url = null;
+            bool isGit = true;
+            var f = plugin.GetType().GetField("UpdateUrl", ~BindingFlags.Default);
+            if (f != null)
+            {
+                var v = f.GetValue(plugin);
+                if (v is string s)
+                {
+                    url = s;
+                    isGit = false;
+                }
+            }
+            f = plugin.GetType().GetField("GitKey", ~BindingFlags.Default);
+            if (f != null)
+            {
+                var v = f.GetValue(plugin);
+                if (v is string s)
+                    url = s + "/releases/latest";
+            }
+            if (url == null)
+            {
+                var split = plugin.Info.Metadata.GUID.Split('.');
+                if (split.Length >= 2)
+                {
+                    if (split[0] == "com" && split.Length >= 3)
+                        url = $"https://api.github.com/repos/{split[1]}/{split[split.Length - 1]}/releases/latest";
+                    else
+                        url = $"https://api.github.com/repos/{split[0]}/{split[split.Length - 1]}/releases/latest";
+                }
+            }
+            if (url == null)
+            {
+                Logger.LogInfo($"No update url found for {plugin.Info.Metadata.Name} ({plugin.Info.Metadata.GUID})");
+                return;
+            }
+            var request = WebRequest.CreateHttp(url);
+            request.Timeout = UpdateCheckTimeout * 1000;
+            request.UserAgent = "SoDMod-HandyTweaks-UpdateChecker";
+            request.Accept = "application/vnd.github+json";
+            request.Method = "GET";
+            running[request] = true;
+            try
+            {
+                while (!CanStartCheck())
+                    await System.Threading.Tasks.Task.Delay(100);
+                using (var req = request.GetResponseAsync())
+                {
+                    await req;
+                    if (req.Status == System.Threading.Tasks.TaskStatus.RanToCompletion)
+                    {
+                        var res = req.Result;
+                        var v = isGit ? res.GetJsonEntry("tag_name") : res.ReadContent();
+                        if (string.IsNullOrEmpty(v))
+                            Logger.LogInfo($"Update check failed for {plugin.Info.Metadata.Name} ({plugin.Info.Metadata.GUID})\nURL: {url}\nReason: Responce was null");
+                        if (Version.TryParse(v, out var newVersion))
+                        {
+                            if (plugin.Info.Metadata.Version == newVersion)
+                                Logger.LogInfo($"{plugin.Info.Metadata.Name} ({plugin.Info.Metadata.GUID}) is up-to-date");
+                            else if (plugin.Info.Metadata.Version > newVersion)
+                                Logger.LogInfo($"{plugin.Info.Metadata.Name} ({plugin.Info.Metadata.GUID}) is newer than the latest release. Release is {newVersion}, current is {plugin.Info.Metadata.Version}");
+                            else
+                            {
+                                Logger.LogInfo($"{plugin.Info.Metadata.Name} ({plugin.Info.Metadata.GUID}) has an update available. Latest is {newVersion}, current is {plugin.Info.Metadata.Version}");
+                                updatesFound.Add((plugin, newVersion.ToString()));
+                            }
+                        }
+                        else
+                            Logger.LogInfo($"Update check failed for {plugin.Info.Metadata.Name} ({plugin.Info.Metadata.GUID})\nURL: {url}\nReason: Responce could not be parsed {(v.Length > 100 ? $"\"{v.Remove(100)}...\" (FullLength={v.Length})" : $"\"{v}\"")}");
+                    }
+                    else
+                        Logger.LogInfo($"Update check failed for {plugin.Info.Metadata.Name} ({plugin.Info.Metadata.GUID})\nURL: {url}\nReason: No responce");
+                }
+            }
+            catch (Exception e)
+            {
+                Logger.LogError($"Update check failed for {plugin.Info.Metadata.Name} ({plugin.Info.Metadata.GUID})\nURL: {url}\nReason: {e.GetType().FullName}: {e.Message}");
+                if (!(e is WebException))
+                    Logger.LogError(e);
+            } finally
+            {
+                CheckStopped();
+                running.TryRemove(request, out _);
+            }
         }
 
         float timer;
         public void Update()
         {
+            if (!seenLogin && UiLogin.pInstance)
+                seenLogin = true;
+            if (running != null && running.Count == 0 && seenLogin)
+            {
+                running = null;
+                Destroy(waitingUI);
+                if (updatesFound.Count == 1)
+                    GameUtilities.DisplayOKMessage("PfKAUIGenericDB", $"Mod {updatesFound[0].Item1.Info.Metadata.Name} has an update available\nCurrent: {updatesFound[0].Item1.Info.Metadata.Version}\nLatest: {updatesFound[0].Item2}", null, "");
+                else if (updatesFound.Count > 1)
+                {
+                    var s = new StringBuilder();
+                    s.Append(updatesFound.Count);
+                    s.Append(" mod updates available:");
+                    for (int i = 0; i < updatesFound.Count; i++)
+                    {
+                        s.Append("\n");
+                        if (i == 4)
+                        {
+                            s.Append("(");
+                            s.Append(updatesFound.Count - 4);
+                            s.Append(" more) ...");
+                            break;
+                        }
+                        s.Append(updatesFound[i].Item1.Info.Metadata.Name);
+                        s.Append(" ");
+                        s.Append(updatesFound[i].Item1.Info.Metadata.Version);
+                        s.Append(" > ");
+                        s.Append(updatesFound[i].Item2);
+                    }
+                    GameUtilities.DisplayOKMessage("PfKAUIGenericDB", s.ToString(), null, "");
+                }
+            }
             if ((timer -= Time.deltaTime) <= 0 && (Input.GetKeyDown(DoFarmStuff) || DoFarmStuffOnTimer) && MyRoomsIntMain.pInstance is FarmManager f)
             {
                 timer = 0.2f;
@@ -146,6 +333,27 @@ namespace HandyTweaks
                     changingPet = SanctuaryManager.pCurPetInstance;
                     GameUtilities.DisplayGenericDB("PfKAUIGenericDB", $"Are you sure you want to change {changingPet.pData.Name} to {(changingPet.pData.Gender == Gender.Male ? "fe" : "")}male?", "Change Dragon Gender", gameObject, "ChangeDragonGender", "OnPopupClose", null, "OnPopupClose",true);
                 }
+            }
+            waitingTime += Time.deltaTime;
+            if (waitingText)
+            {
+                if (waitingTime >= 1)
+                {
+                    textContainer.offsetMin = new Vector2(0, -waitingText.preferredHeight - 40);
+                    textContainer.offsetMax = new Vector2(waitingText.preferredWidth + 40, 0);
+                    waitingTime -= 1;
+                }
+                var t = $"Checking for mod updates ({running.Count} remaining)";
+                var s = new StringBuilder();
+                for (int i = 0; i < t.Length; i++)
+                {
+                    s.Append("<color=#");
+                    s.Append(ColorUtility.ToHtmlStringRGB(Color.HSVToRGB(0, 0, (float)(Math.Sin((i / (double)t.Length - waitingTime) * Math.PI * 2) / 4 + 0.75))));
+                    s.Append(">");
+                    s.Append(t[i]);
+                    s.Append("</color>");
+                }
+                waitingText.text = s.ToString();
             }
         }
         SanctuaryPet changingPet;
@@ -266,6 +474,29 @@ namespace HandyTweaks
         public static string GetAttributeField(this string att) => att.TryGetAttributeField(out var f) ? f : null;
         static FieldInfo _mContentMenuCombat = typeof(UiStatPopUp).GetField("mContentMenuCombat", ~BindingFlags.Default);
         public static KAUIMenu GetContentMenuCombat(this UiStatPopUp item) => (KAUIMenu)_mContentMenuCombat.GetValue(item);
+
+        public static string ReadContent(this WebResponse response, Encoding encoding = null)
+        {
+            using (var stream = response.GetResponseStream())
+            {
+                var b = new byte[stream.Length];
+                stream.Read(b, 0, b.Length);
+                return (encoding ?? Encoding.UTF8).GetString(b);
+            }
+        }
+        public static string GetJsonEntry(this WebResponse response, string key, Encoding encoding = null)
+        {
+            using (var stream = response.GetResponseStream())
+            {
+                var reader = System.Runtime.Serialization.Json.JsonReaderWriterFactory.CreateJsonReader(stream, new System.Xml.XmlDictionaryReaderQuotas() {  });
+                while (reader.Name != key && reader.Read())
+                { }
+                var m = "";
+                if (reader.Name == key && reader.Read())
+                    return reader.Value;
+                return null;
+            }
+        }
     }
     public enum StatCompareResult
     {
@@ -590,6 +821,16 @@ namespace HandyTweaks
                 }
             foreach (var k in s)
                 Show(Main.GetCustomStatInfo(k).DisplayName, Math.Round(d[k] * 100) + "%");
+        }
+    }
+
+    [HarmonyPatch(typeof(BaseUnityPlugin), MethodType.Constructor, new Type[0])]
+    static class Patch_CreatePluginObj
+    {
+        static void Postfix(BaseUnityPlugin __instance)
+        {
+            if (Main.CheckForModUpdates)
+                Main.instance.CheckModVersion(__instance);
         }
     }
 }

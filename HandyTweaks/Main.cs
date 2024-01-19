@@ -134,7 +134,7 @@ namespace HandyTweaks
             {
                 var v = f.GetValue(plugin);
                 if (v is string s)
-                    url = s + "/releases/latest";
+                    url = "https://api.github.com/repos/" + s + "/releases/latest";
             }
             if (url == null)
             {

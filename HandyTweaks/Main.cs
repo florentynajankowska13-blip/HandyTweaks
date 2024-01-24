@@ -17,7 +17,7 @@ using Object = UnityEngine.Object;
 
 namespace HandyTweaks
 {
-    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.0.7")]
+    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.0.8")]
     [BepInDependency("com.aidanamite.ConfigTweaks")]
     public class Main : BaseUnityPlugin
     {
@@ -155,7 +155,7 @@ namespace HandyTweaks
             var request = WebRequest.CreateHttp(url);
             request.Timeout = UpdateCheckTimeout * 1000;
             request.UserAgent = "SoDMod-HandyTweaks-UpdateChecker";
-            request.Accept = "application/vnd.github+json";
+            request.Accept = isGit ? "application/vnd.github+json" : "raw";
             request.Method = "GET";
             running[request] = true;
             try
@@ -371,12 +371,19 @@ namespace HandyTweaks
             AvAvatar.SetUIActive(true);
         }
 
-        static Dictionary<string, (PetStatType,string)> FieldToType = new Dictionary<string, (PetStatType, string)>
+        static Dictionary<string, (PetStatType, string, string)> FlightFieldToType = new Dictionary<string, (PetStatType, string, string)>
         {
-            { "_YawTurnRate",(PetStatType.TURNRATE,"TRN") },
-            { "_PitchTurnRate",(PetStatType.PITCHRATE,"PCH") },
-            { "_Acceleration",(PetStatType.ACCELERATION,"ACL") },
-            { "_Speed",(PetStatType.MAXSPEED,"SPD") }
+            { "_YawTurnRate",(PetStatType.TURNRATE,"TRN","") },
+            { "_PitchTurnRate",(PetStatType.PITCHRATE,"PCH", "") },
+            { "_Acceleration",(PetStatType.ACCELERATION,"ACL", "") },
+            { "_Speed",(PetStatType.MAXSPEED,"FSP", "Pet ") }
+        };
+        static Dictionary<string, (string, string)> PlayerFieldToType = new Dictionary<string, (string, string)>
+        {
+            { "_MaxForwardSpeed",("Walk Speed","WSP") },
+            { "_Gravity",("Gravity","GRV") },
+            { "_Height",("Height","HGT") },
+            { "_PushPower",("Push Power","PSH") }
         };
         static Dictionary<SanctuaryPetMeterType, (string,string)> MeterToName = new Dictionary<SanctuaryPetMeterType, (string, string)>
         {
@@ -396,16 +403,25 @@ namespace HandyTweaks
                 var name = AttributeName;
                 var abv = "???";
                 var found = false;
-                if (AttributeName.TryGetAttributeField(out var field) && FieldToType.TryGetValue(field, out var type))
+                if (AttributeName.TryGetAttributeField(out var field))
                 {
-                    found = true;
-                    name = SanctuaryData.GetDisplayTextFromPetStat(type.Item1);
-                    abv = type.Item2;
+                    if (FlightFieldToType.TryGetValue(field, out var type))
+                    {
+                        found = true;
+                        name = type.Item3 + SanctuaryData.GetDisplayTextFromPetStat(type.Item1);
+                        abv = type.Item2;
+                    }
+                    else if (PlayerFieldToType.TryGetValue(field,out var type2))
+                    {
+                        found = true;
+                        name = type2.Item1;
+                        abv = type2.Item2;
+                    }
                 }
                 else if (Enum.TryParse<SanctuaryPetMeterType>(AttributeName, true, out var type2) && MeterToName.TryGetValue(type2, out var meterName))
                 {
                     found = true;
-                    (name,abv) = meterName;
+                    (name, abv) = meterName;
                 }
                 statCache[AttributeName] = v = new CustomStatInfo(AttributeName,name,abv,found);
             }

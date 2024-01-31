@@ -17,7 +17,7 @@ using Object = UnityEngine.Object;
 
 namespace HandyTweaks
 {
-    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.0.8")]
+    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.0.9")]
     [BepInDependency("com.aidanamite.ConfigTweaks")]
     public class Main : BaseUnityPlugin
     {
@@ -411,14 +411,13 @@ namespace HandyTweaks
                         name = type.Item3 + SanctuaryData.GetDisplayTextFromPetStat(type.Item1);
                         abv = type.Item2;
                     }
-                    else if (PlayerFieldToType.TryGetValue(field,out var type2))
+                    else if (PlayerFieldToType.TryGetValue(field,out var type3))
                     {
                         found = true;
-                        name = type2.Item1;
-                        abv = type2.Item2;
+                        (name, abv) = type3;
                     }
                 }
-                else if (Enum.TryParse<SanctuaryPetMeterType>(AttributeName, true, out var type2) && MeterToName.TryGetValue(type2, out var meterName))
+                if (!found && Enum.TryParse<SanctuaryPetMeterType>(AttributeName, true, out var type2) && MeterToName.TryGetValue(type2, out var meterName))
                 {
                     found = true;
                     (name, abv) = meterName;
@@ -427,6 +426,31 @@ namespace HandyTweaks
             }
             return v;
         }
+
+        public static int GemCost;
+        public static int CoinCost;
+        public static List<ItemData> Buying;
+        public void ConfirmBuyAll()
+        {
+            if ( GemCost > Money.pGameCurrency || CoinCost > Money.pCashCurrency)
+            {
+                GameUtilities.DisplayOKMessage("PfKAUIGenericDB", GemCost > Money.pGameCurrency ? CoinCost > Money.pCashCurrency ? "Not enough gems and coins" : "Not enough gems" : "Not enough coins", null, "");
+                return;
+            }
+            foreach (var i in Buying)
+                CommonInventoryData.pInstance.AddPurchaseItem(i.ItemID, 1, "HandyTweaks.BuyAll");
+            KAUICursorManager.SetExclusiveLoadingGear(true);
+            CommonInventoryData.pInstance.DoPurchase(0,0,x =>
+            {
+                KAUICursorManager.SetExclusiveLoadingGear(false);
+                GameUtilities.DisplayOKMessage("PfKAUIGenericDB", x.Success ? "Purchase complete" : "Purchase failed", null, "");
+                if (x.Success)
+                    KAUIStore.pInstance.pChooseMenu.ChangeCategory(KAUIStore.pInstance.pFilter, true);
+
+            });
+        }
+
+        public void DoNothing() { }
     }
 
     public class CustomStatInfo
@@ -490,6 +514,10 @@ namespace HandyTweaks
         public static string GetAttributeField(this string att) => att.TryGetAttributeField(out var f) ? f : null;
         static FieldInfo _mContentMenuCombat = typeof(UiStatPopUp).GetField("mContentMenuCombat", ~BindingFlags.Default);
         public static KAUIMenu GetContentMenuCombat(this UiStatPopUp item) => (KAUIMenu)_mContentMenuCombat.GetValue(item);
+        static FieldInfo _mInventory = typeof(CommonInventoryData).GetField("mInventory", ~BindingFlags.Default);
+        public static Dictionary<int, List<UserItemData>> FullInventory(this CommonInventoryData inv) => (Dictionary<int, List<UserItemData>>)_mInventory.GetValue(inv);
+        static FieldInfo _mCachedItemData = typeof(KAUIStoreChooseMenu).GetField("mCachedItemData", ~BindingFlags.Default);
+        public static Dictionary<ItemData, int> GetCached(this KAUIStoreChooseMenu menu) => (Dictionary<ItemData, int>)_mCachedItemData.GetValue(menu);
 
         public static string ReadContent(this WebResponse response, Encoding encoding = null)
         {
@@ -512,6 +540,37 @@ namespace HandyTweaks
                     return reader.Value;
                 return null;
             }
+        }
+
+        public static bool IsRankLocked(this ItemData data, out int rid, int rankType)
+        {
+            rid = 0;
+            if (data.RewardTypeID > 0)
+                rankType = data.RewardTypeID;
+            if (data.Points != null && data.Points.Value > 0)
+            {
+                rid = data.Points.Value;
+                UserAchievementInfo userAchievementInfoByType = UserRankData.GetUserAchievementInfoByType(rankType);
+                return userAchievementInfoByType == null || userAchievementInfoByType.AchievementPointTotal == null || rid > userAchievementInfoByType.AchievementPointTotal.Value;
+            }
+            if (data.RankId != null && data.RankId.Value > 0)
+            {
+                rid = data.RankId.Value;
+                UserRank userRank = (rankType == 8) ? PetRankData.GetUserRank(SanctuaryManager.pCurPetData) : UserRankData.GetUserRankByType(rankType);
+                return userRank == null || rid > userRank.RankID;
+            }
+            return false;
+        }
+
+        public static bool HasPrereqItem(this ItemData data)
+        {
+            if (data.Relationship == null)
+                return true;
+            ItemDataRelationship[] relationship = data.Relationship;
+            foreach (var itemDataRelationship in data.Relationship)
+                if (itemDataRelationship.Type == "Prereq")
+                    return (ParentData.pIsReady && ParentData.pInstance.HasItem(itemDataRelationship.ItemId)) || CommonInventoryData.pInstance.FindItem(itemDataRelationship.ItemId) != null;
+            return true;
         }
     }
     public enum StatCompareResult
@@ -750,7 +809,7 @@ namespace HandyTweaks
             foreach (var p in e)
             {
                 var item2 = p.Value.Item2 ?? p.Value.Item1;
-                Debug.Log($"\n{p.Key}\n - [{p.Value.Item1?.Attribute.Join(x => x.Key + "=" + x.Value)}]\n - [{item2?.Attribute.Join(x => x.Key + "=" + x.Value)}]");
+                Debug.Log($"\n{p.Key}\n - [{p.Value.Item1?.Attribute?.Join(x => x.Key + "=" + x.Value)}]\n - [{item2?.Attribute?.Join(x => x.Key + "=" + x.Value)}]");
                 if (p.Value.Item1?.Attribute != null)
                     foreach (var a in p.Value.Item1.Attribute)
                     {
@@ -847,6 +906,66 @@ namespace HandyTweaks
         {
             if (Main.CheckForModUpdates)
                 Main.instance.CheckModVersion(__instance);
+        }
+    }
+
+    [HarmonyPatch(typeof(KAUIStore))]
+    static class Patch_Store
+    {
+        [HarmonyPatch("Start")]
+        [HarmonyPostfix]
+        static void Start(KAUIStore __instance, KAWidget ___mBtnPreviewBuy)
+        {
+            var n = __instance.DuplicateWidget(___mBtnPreviewBuy, UIAnchor.Side.BottomLeft);
+            n.name = "btnBuyAll";
+            n.SetText("Buy All");
+            n.SetVisibility(true);
+            n.SetInteractive(true);
+            var p = ___mBtnPreviewBuy.transform.position;
+            p.x = -p.x * 0.7f;
+            n.transform.position = p;
+        }
+
+        [HarmonyPatch("OnClick")]
+        [HarmonyPostfix]
+        static void OnClick(KAUIStore __instance, KAWidget item)
+        {
+            if (item.name == "btnBuyAll")
+            {
+                var byCatergory = CommonInventoryData.pInstance.FullInventory();
+                
+                var all = new List<ItemData>();
+                var check = new HashSet<int>();
+                var gems = 0;
+                var coins = 0;
+                var cache = KAUIStore.pInstance.pChooseMenu.GetCached();
+                foreach (var ite in cache.Keys)
+                    if (ite != null
+                        && !ite.IsBundleItem()
+                        && !ite.HasCategory(Category.MysteryBox)
+                        && !ite.HasCategory(Category.DragonTickets)
+                        && (!ite.Locked || SubscriptionInfo.pIsMember)
+                        && (__instance.pCategoryMenu.pDisableRankCheck || !ite.IsRankLocked(out _, __instance.pStoreInfo._RankTypeID))
+                        && ite.HasPrereqItem()
+                        && CommonInventoryData.pInstance.GetQuantity(ite.ItemID) <= 0
+                        && check.Add(ite.ItemID))
+                    {
+                        all.Add(ite);
+                        if (ite.GetPurchaseType() == 1)
+                            coins += ite.GetFinalCost();
+                        else
+                            gems += ite.GetFinalCost();
+                    }
+                if (all.Count == 0)
+                    GameUtilities.DisplayOKMessage("PfKAUIGenericDB", "No items left to buy", null, "");
+                else
+                {
+                    Main.CoinCost = coins;
+                    Main.GemCost = gems;
+                    Main.Buying = all;
+                    GameUtilities.DisplayGenericDB("PfKAUIGenericDB", $"Buying these {Main.Buying.Count} items will cost {(gems > 0 ? coins > 0 ? $"{coins} coins and {gems} gems" : $"{gems} gems" : coins > 0 ? $"{coins} coins" : "nothing")}. Are you sure you want to buy these?", "Buy All", Main.instance.gameObject, nameof(Main.ConfirmBuyAll), nameof(Main.DoNothing), null, null, true);
+                }
+            }
         }
     }
 }

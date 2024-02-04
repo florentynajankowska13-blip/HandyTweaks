@@ -5,6 +5,7 @@ using System;
 using System.Collections;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
@@ -17,7 +18,7 @@ using Object = UnityEngine.Object;
 
 namespace HandyTweaks
 {
-    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.0.9")]
+    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.0.10")]
     [BepInDependency("com.aidanamite.ConfigTweaks")]
     public class Main : BaseUnityPlugin
     {
@@ -43,6 +44,14 @@ namespace HandyTweaks
         public static bool ShowRacingEquipmentStats = false;
         [ConfigField]
         public static KeyCode ChangeDragonsGender = KeyCode.Equals;
+        [ConfigField]
+        public static bool InfiniteZoom = false;
+        [ConfigField]
+        public static float ZoomSpeed = 1;
+        [ConfigField]
+        public static bool DisableDragonAutomaticSkinUnequip = true;
+        [ConfigField]
+        public static bool ApplyDragonPrimaryToEmission = false;
         [ConfigField]
         public static bool CheckForModUpdates = true;
         [ConfigField]
@@ -518,6 +527,8 @@ namespace HandyTweaks
         public static Dictionary<int, List<UserItemData>> FullInventory(this CommonInventoryData inv) => (Dictionary<int, List<UserItemData>>)_mInventory.GetValue(inv);
         static FieldInfo _mCachedItemData = typeof(KAUIStoreChooseMenu).GetField("mCachedItemData", ~BindingFlags.Default);
         public static Dictionary<ItemData, int> GetCached(this KAUIStoreChooseMenu menu) => (Dictionary<ItemData, int>)_mCachedItemData.GetValue(menu);
+        static MethodInfo _RemoveDragonSkin = typeof(UiDragonCustomization).GetMethod("RemoveDragonSkin", ~BindingFlags.Default);
+        public static void RemoveDragonSkin(this UiDragonCustomization menu) => _RemoveDragonSkin.Invoke(menu, new object[0]);
 
         public static string ReadContent(this WebResponse response, Encoding encoding = null)
         {
@@ -535,7 +546,6 @@ namespace HandyTweaks
                 var reader = System.Runtime.Serialization.Json.JsonReaderWriterFactory.CreateJsonReader(stream, new System.Xml.XmlDictionaryReaderQuotas() {  });
                 while (reader.Name != key && reader.Read())
                 { }
-                var m = "";
                 if (reader.Name == key && reader.Read())
                     return reader.Value;
                 return null;
@@ -967,5 +977,75 @@ namespace HandyTweaks
                 }
             }
         }
+    }
+
+    [HarmonyPatch(typeof(CaAvatarCam), "LateUpdate")]
+    static class Patch_AvatarCam
+    {
+        static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
+        {
+            var code = instructions.ToList();
+            for (int i = code.Count - 1; i >= 0; i--)
+                if (code[i].opcode == OpCodes.Ldfld && code[i].operand is FieldInfo f && f.Name == "mMaxCameraDistance")
+                    code.Insert(i + 1, new CodeInstruction(OpCodes.Call, AccessTools.Method(typeof(Patch_AvatarCam), nameof(EditMaxZoom))));
+                else if (code[i].opcode == OpCodes.Ldc_R4 && (float)code[i].operand == 0.25f)
+                    code.Insert(i + 1, new CodeInstruction(OpCodes.Call, AccessTools.Method(typeof(Patch_AvatarCam), nameof(EditZoomSpeed))));
+            return code;
+        }
+        static float EditMaxZoom(float original) => Main.InfiniteZoom ? float.PositiveInfinity : original;
+        static float EditZoomSpeed(float original) => original * Main.ZoomSpeed;
+    }
+
+    [HarmonyPatch(typeof(UiDragonCustomization), "RemoveDragonSkin")]
+    static class Patch_ChangeDragonColor
+    {
+        static bool Prefix() => !Main.DisableDragonAutomaticSkinUnequip;
+    }
+
+    [HarmonyPatch(typeof(SanctuaryPet), "UpdateShaders")]
+    static class Patch_UpdatePetShaders
+    {
+        static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
+        {
+            var code = instructions.ToList();
+            code.InsertRange(code.FindIndex(x => x.opcode == OpCodes.Ldloc_S && ((x.operand is LocalBuilder l && l.LocalIndex == 6) || (x.operand is IConvertible i && i.ToInt32(CultureInfo.InvariantCulture) == 6))) + 1,
+                new[] 
+                {
+                    new CodeInstruction(OpCodes.Ldloc_0),
+                    new CodeInstruction(OpCodes.Call, AccessTools.Method(typeof(Patch_UpdatePetShaders), nameof(EditMat)))
+                });
+            return code;
+        }
+        static Material EditMat(Material material, Color primary)
+        {
+            if (material.HasProperty("_EmissiveColor"))
+            {
+                if (Main.ApplyDragonPrimaryToEmission)
+                {
+                    var e = MaterialEdit.Get(material).OriginalEmissive;
+                    material.SetColor("_EmissiveColor", new Color(primary.r * e.strength, primary.g * e.strength, primary.b * e.strength, primary.a * e.alpha));
+                }
+                else
+                    material.SetColor("_EmissiveColor", MaterialEdit.Get(material).OriginalEmissive.original);
+            }
+            return material;
+        }
+    }
+
+    public class MaterialEdit
+    {
+        static ConditionalWeakTable<Material, MaterialEdit> data = new ConditionalWeakTable<Material, MaterialEdit>();
+        public static MaterialEdit Get(Material material)
+        {
+            if (data.TryGetValue(material, out var edit)) return edit;
+            edit = data.GetOrCreateValue(material);
+            if (material.HasProperty("_EmissiveColor"))
+            {
+                var c = material.GetColor("_EmissiveColor");
+                edit.OriginalEmissive = (Math.Max(Math.Max(c.r,c.g),c.b),c.a, c);
+            }
+            return edit;
+        }
+        public (float strength, float alpha, Color original) OriginalEmissive;
     }
 }

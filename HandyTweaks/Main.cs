@@ -18,7 +18,7 @@ using Object = UnityEngine.Object;
 
 namespace HandyTweaks
 {
-    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.0.10")]
+    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.1.0")]
     [BepInDependency("com.aidanamite.ConfigTweaks")]
     public class Main : BaseUnityPlugin
     {
@@ -52,6 +52,14 @@ namespace HandyTweaks
         public static bool DisableDragonAutomaticSkinUnequip = true;
         [ConfigField]
         public static bool ApplyDragonPrimaryToEmission = false;
+        [ConfigField]
+        public static bool AllowCustomizingSpecialDragons = false;
+        [ConfigField]
+        public static int StableQuestChanceBoost = 0;
+        [ConfigField]
+        public static float StableQuestDragonValueMultiplier = 1;
+        [ConfigField]
+        public static float StableQuestTimeMultiplier = 1;
         [ConfigField]
         public static bool CheckForModUpdates = true;
         [ConfigField]
@@ -954,6 +962,7 @@ namespace HandyTweaks
                         && !ite.IsBundleItem()
                         && !ite.HasCategory(Category.MysteryBox)
                         && !ite.HasCategory(Category.DragonTickets)
+                        && !ite.HasCategory(Category.DragonAgeUp)
                         && (!ite.Locked || SubscriptionInfo.pIsMember)
                         && (__instance.pCategoryMenu.pDisableRankCheck || !ite.IsRankLocked(out _, __instance.pStoreInfo._RankTypeID))
                         && ite.HasPrereqItem()
@@ -1047,5 +1056,112 @@ namespace HandyTweaks
             return edit;
         }
         public (float strength, float alpha, Color original) OriginalEmissive;
+    }
+
+    [HarmonyPatch(typeof(SanctuaryData), "GetPetCustomizationType", typeof(int))]
+    static class Patch_PetCustomization
+    {
+        static bool Prefix(ref PetCustomizationType __result)
+        {
+            if (Main.AllowCustomizingSpecialDragons)
+            {
+                __result = PetCustomizationType.Default;
+                return false;
+            }
+            return true;
+        }
+    }
+
+    [HarmonyPatch(typeof(UserNotifyDragonTicket))]
+    static class Patch_OpenCloseCustomization
+    {
+        public static (string, string)? closed;
+        [HarmonyPatch("ActivateDragonCreationUIObj")]
+        [HarmonyPrefix]
+        static void ActivateDragonCreationUIObj()
+        {
+            if (KAUIStore.pInstance)
+            {
+                closed = (KAUIStore.pInstance.pCategory, KAUIStore.pInstance.pStoreInfo._Name);
+                KAUIStore.pInstance.ExitStore();
+            }
+        }
+        [HarmonyPatch("OnStableUIClosed")]
+        [HarmonyPostfix]
+        static void OnStableUIClosed()
+        {
+            if (closed != null)
+            {
+                var t = closed.Value;
+                closed = null;
+                StoreLoader.Load(true, t.Item1, t.Item2, null, UILoadOptions.AUTO, "", null);
+            }
+        }
+    }
+
+    [HarmonyPatch(typeof(SanctuaryData), "GetLocalizedPetName")]
+    static class Patch_GetPetName
+    {
+        static void Postfix(RaisedPetData raisedPetData, ref string __result)
+        {
+            if (__result.Length == 15 && __result.StartsWith("Dragon-") && uint.TryParse(__result.Remove(0, 7), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out _))
+                __result = SanctuaryData.GetPetDefaultName(raisedPetData.PetTypeID);
+        }
+    }
+
+    [HarmonyPatch]
+    static class Patch_GetStableQuestDuration
+    {
+        static IEnumerable<MethodBase> TargetMethods()
+        {
+            yield return AccessTools.Method(typeof(StableQuestSlotWidget), "HandleAdButtons");
+            yield return AccessTools.Method(typeof(StableQuestSlotWidget), "StateChangeInit");
+            yield return AccessTools.Method(typeof(StableQuestSlotWidget), "Update");
+            yield return AccessTools.Method(typeof(TimedMissionManager), "CheckMissionCompleted", new[] { typeof(TimedMissionSlotData) });
+            yield return AccessTools.Method(typeof(TimedMissionManager), "CheckMissionSuccess");
+            yield return AccessTools.Method(typeof(TimedMissionManager), "GetCompletionTime");
+            yield return AccessTools.Method(typeof(TimedMissionManager), "GetPetEngageTime");
+            yield return AccessTools.Method(typeof(TimedMissionManager), "StartMission");
+            yield return AccessTools.Method(typeof(UiStableQuestDetail), "HandleAdButton");
+            yield return AccessTools.Method(typeof(UiStableQuestDetail), "MissionLogIndex");
+            yield return AccessTools.Method(typeof(UiStableQuestDetail), "SetSlotData");
+            yield return AccessTools.Method(typeof(UiStableQuestMissionStart), "RefreshUi");
+            yield return AccessTools.Method(typeof(UiStableQuestSlotsMenu), "OnAdWatched");
+            yield break;
+        }
+
+        static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions, ILGenerator iL)
+        {
+            var code = instructions.ToList();
+            for (int i = code.Count - 1; i >= 0; i--)
+                if (code[i].operand is FieldInfo f && f.Name == "Duration" && f.DeclaringType == typeof(TimedMission))
+                    code.Insert(i + 1, new CodeInstruction(OpCodes.Call, typeof(Patch_GetStableQuestDuration).GetMethod(nameof(EditDuration), ~BindingFlags.Default)));
+            return code;
+        }
+
+        static int EditDuration(int original) => (int)Math.Round(original * Main.StableQuestTimeMultiplier);
+    }
+
+    [HarmonyPatch]
+    static class Patch_GetStableQuestBaseChance
+    {
+        static IEnumerable<MethodBase> TargetMethods() => from m in typeof(TimedMissionManager).GetMethods() where m.Name == "GetWinProbability" select m;
+
+        static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions, ILGenerator iL)
+        {
+            var code = instructions.ToList();
+            for (int i = code.Count - 1; i >= 0; i--)
+                if (code[i].operand is FieldInfo f && f.Name == "WinFactor" && f.DeclaringType == typeof(TimedMission))
+                    code.Insert(i + 1, new CodeInstruction(OpCodes.Call, typeof(Patch_GetStableQuestBaseChance).GetMethod(nameof(EditChance), ~BindingFlags.Default)));
+            return code;
+        }
+
+        static int EditChance(int original) => original + Main.StableQuestChanceBoost;
+    }
+
+    [HarmonyPatch(typeof(TimedMissionManager), "GetWinProbabilityForPet")]
+    static class Patch_GetStableQuestPetChance
+    {
+        static void Postfix(ref float __result) => __result *= Main.StableQuestDragonValueMultiplier;
     }
 }

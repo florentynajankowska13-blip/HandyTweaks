@@ -18,7 +18,7 @@ using Object = UnityEngine.Object;
 
 namespace HandyTweaks
 {
-    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.1.0")]
+    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.1.1")]
     [BepInDependency("com.aidanamite.ConfigTweaks")]
     public class Main : BaseUnityPlugin
     {
@@ -60,6 +60,12 @@ namespace HandyTweaks
         public static float StableQuestDragonValueMultiplier = 1;
         [ConfigField]
         public static float StableQuestTimeMultiplier = 1;
+        [ConfigField]
+        public static bool BiggerInputBoxes = true;
+        [ConfigField]
+        public static bool MoreNameFreedom = true;
+        [ConfigField]
+        public static bool AutomaticFireballs = true;
         [ConfigField]
         public static bool CheckForModUpdates = true;
         [ConfigField]
@@ -1145,7 +1151,7 @@ namespace HandyTweaks
     [HarmonyPatch]
     static class Patch_GetStableQuestBaseChance
     {
-        static IEnumerable<MethodBase> TargetMethods() => from m in typeof(TimedMissionManager).GetMethods() where m.Name == "GetWinProbability" select m;
+        static IEnumerable<MethodBase> TargetMethods() => from m in typeof(TimedMissionManager).GetMethods(~BindingFlags.Default) where m.Name == "GetWinProbability" select m;
 
         static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions, ILGenerator iL)
         {
@@ -1163,5 +1169,66 @@ namespace HandyTweaks
     static class Patch_GetStableQuestPetChance
     {
         static void Postfix(ref float __result) => __result *= Main.StableQuestDragonValueMultiplier;
+    }
+
+    [HarmonyPatch]
+    static class Patch_GetInputLength
+    {
+        static IEnumerable<MethodBase> TargetMethods()
+        {
+            yield return AccessTools.Method(typeof(KAUIStoreBuyPopUp), "RefreshValues");
+            yield return AccessTools.Method(typeof(UIInput), "Insert");
+            yield return AccessTools.Method(typeof(UIInput), "Validate", new[] { typeof(string) });
+            yield return AccessTools.Method(typeof(UiItemTradeGenericDB), "RefreshQuantity");
+            yield return AccessTools.Method(typeof(UiPrizeCodeEnterDB), "Start");
+            yield break;
+        }
+
+        static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions, ILGenerator iL)
+        {
+            var code = instructions.ToList();
+            for (int i = code.Count - 1; i >= 0; i--)
+                if (code[i].operand is FieldInfo f && f.Name == "characterLimit" && f.DeclaringType == typeof(UIInput))
+                    code.Insert(i + 1, new CodeInstruction(OpCodes.Call, typeof(Patch_GetInputLength).GetMethod(nameof(EditLength), ~BindingFlags.Default)));
+            return code;
+        }
+
+        static int EditLength(int original) => Main.BiggerInputBoxes ? (int)Math.Min((long)original * original, int.MaxValue) : original;
+    }
+
+    [HarmonyPatch(typeof(UIInput),"Validate",typeof(string),typeof(int),typeof(char))]
+    static class Patch_CanInput
+    {
+        static bool Prefix(UIInput __instance, string text, int pos, char ch, ref char __result)
+        {
+            if (Main.MoreNameFreedom && (__instance.validation == UIInput.Validation.Alphanumeric || __instance.validation == UIInput.Validation.Username || __instance.validation == UIInput.Validation.Name))
+            {
+                var cat = char.GetUnicodeCategory(ch);
+                if (cat == UnicodeCategory.Control || cat == UnicodeCategory.Format || cat == UnicodeCategory.OtherNotAssigned)
+                    __result = '\0';
+                else
+                    __result = ch;
+                return false;
+            }
+            return true;
+        }
+    }
+
+    [HarmonyPatch(typeof(KAEditBox), "ValidateText", typeof(string), typeof(int), typeof(char))]
+    static class Patch_CanInput2
+    {
+        static bool Prefix(KAEditBox __instance, string text, int charIndex, char addedChar, ref char __result)
+        {
+            if (Main.MoreNameFreedom && (__instance._CheckValidityOnInput && __instance._RegularExpression != null && __instance._RegularExpression.Contains("a-z")))
+            {
+                var cat = char.GetUnicodeCategory(addedChar);
+                if (cat == UnicodeCategory.Control || cat == UnicodeCategory.Format || cat == UnicodeCategory.OtherNotAssigned)
+                    __result = '\0';
+                else
+                    __result = addedChar;
+                return false;
+            }
+            return true;
+        }
     }
 }

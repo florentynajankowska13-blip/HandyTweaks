@@ -18,7 +18,7 @@ using Object = UnityEngine.Object;
 
 namespace HandyTweaks
 {
-    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.1.1")]
+    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.1.2")]
     [BepInDependency("com.aidanamite.ConfigTweaks")]
     public class Main : BaseUnityPlugin
     {
@@ -1230,5 +1230,35 @@ namespace HandyTweaks
             }
             return true;
         }
+    }
+
+    [HarmonyPatch(typeof(UiAvatarControls), "Update")]
+    static class Patch_ControlsUpdate
+    {
+        static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions, ILGenerator iL)
+        {
+            var code = instructions.ToList();
+            var flag = false;
+            for (int i = 0; i < code.Count; i++)
+                if (code[i].operand is MethodInfo m && flag)
+                {
+                    if (m.Name == "GetButtonDown")
+                        code[i] = new CodeInstruction(OpCodes.Call, typeof(Patch_ControlsUpdate).GetMethod(nameof(ButtonDown), ~BindingFlags.Default));
+                    else if (m.Name == "GetButtonUp")
+                        code[i] = new CodeInstruction(OpCodes.Call, typeof(Patch_ControlsUpdate).GetMethod(nameof(ButtonUp), ~BindingFlags.Default));
+                    flag = false;
+                }
+                else if (code[i].operand is string str)
+                    flag = str == "DragonFire";
+            return code;
+        }
+        static bool ButtonDown(string button) => Main.AutomaticFireballs ? KAInput.GetButton(button) : KAInput.GetButtonDown(button);
+        static bool ButtonUp(string button) => Main.AutomaticFireballs ? KAInput.GetButton(button) : KAInput.GetButtonUp(button);
+    }
+
+    [HarmonyPatch(typeof(RacingManager),"AddPenalty")]
+    static class Patch_AddRacingCooldown
+    {
+        public static bool Prefix() => RacingManager.Instance.State >= RacingManagerState.RaceCountdown;
     }
 }

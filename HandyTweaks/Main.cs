@@ -18,7 +18,7 @@ using Object = UnityEngine.Object;
 
 namespace HandyTweaks
 {
-    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.1.2")]
+    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.1.3")]
     [BepInDependency("com.aidanamite.ConfigTweaks")]
     public class Main : BaseUnityPlugin
     {
@@ -66,6 +66,8 @@ namespace HandyTweaks
         public static bool MoreNameFreedom = true;
         [ConfigField]
         public static bool AutomaticFireballs = true;
+        [ConfigField]
+        public static bool AlwaysMaxHappiness = false;
         [ConfigField]
         public static bool CheckForModUpdates = true;
         [ConfigField]
@@ -377,6 +379,13 @@ namespace HandyTweaks
                     s.Append("</color>");
                 }
                 waitingText.text = s.ToString();
+            }
+            if (AlwaysMaxHappiness && SanctuaryManager.pCurPetInstance)
+            {
+                var cur = SanctuaryManager.pCurPetInstance.GetPetMeter(SanctuaryPetMeterType.HAPPINESS).mMeterValData.Value;
+                var max = SanctuaryData.GetMaxMeter(SanctuaryPetMeterType.HAPPINESS, SanctuaryManager.pCurPetInstance.pData);
+                if (cur < max)
+                    SanctuaryManager.pCurPetInstance.UpdateMeter(SanctuaryPetMeterType.HAPPINESS, max - cur);
             }
         }
         SanctuaryPet changingPet;

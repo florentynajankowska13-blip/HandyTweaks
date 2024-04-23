@@ -15,10 +15,13 @@ using System.Net;
 using UnityEngine;
 using UnityEngine.UI;
 using Object = UnityEngine.Object;
+using System.Security.Permissions;
+using Newtonsoft.Json.Linq;
+using BepInEx.Configuration;
 
 namespace HandyTweaks
 {
-    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.1.3")]
+    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.2.0")]
     [BepInDependency("com.aidanamite.ConfigTweaks")]
     public class Main : BaseUnityPlugin
     {
@@ -68,6 +71,10 @@ namespace HandyTweaks
         public static bool AutomaticFireballs = true;
         [ConfigField]
         public static bool AlwaysMaxHappiness = false;
+        [ConfigField]
+        public static KeyCode ChangeDragonFireballColour = KeyCode.KeypadMultiply;
+        [ConfigField]
+        public static Dictionary<string, bool> DisableHappyParticles = new Dictionary<string, bool>();
         [ConfigField]
         public static bool CheckForModUpdates = true;
         [ConfigField]
@@ -347,6 +354,71 @@ namespace HandyTweaks
                         }
                     }
             }
+            if (Input.GetKeyDown(ChangeDragonFireballColour) && AvAvatar.pState != AvAvatarState.PAUSED && AvAvatar.pState != AvAvatarState.NONE && AvAvatar.GetUIActive() && SanctuaryManager.pCurPetInstance)
+            {
+                AvAvatar.SetUIActive(false);
+                AvAvatar.pState = AvAvatarState.PAUSED;
+                var p = SanctuaryManager.pCurPetInstance.pData;
+                var ep = ExtendedPetData.Get(p);
+                KAUICursorManager.SetDefaultCursor("Loading", true);
+                Patch_SelectName.SkipNameChecks = true;
+                RsResourceManager.LoadAssetFromBundle(GameConfig.GetKeyData("SelectNameAsset"), (a,b,c,d,e) =>
+                {
+                    if (b == RsResourceLoadEvent.COMPLETE)
+                    {
+                        KAUICursorManager.SetDefaultCursor("Arrow", true);
+                        GameObject ui = null;
+                        try
+                        {
+                            ui = Instantiate((GameObject)d);
+                            var s = ui.GetComponent<UiSelectName>();
+                            s.FindItem("TxtTitle").SetText("Select your fireball colour");
+                            s.FindItem("TxtHint").SetText("Enter colour here");
+                            s.FindItem("TxtSugestedNames").SetText("Suggested colours:");
+                            s.FindItem("TxtStatus").SetText("Colour may be either a simple colour name or hex number");
+                            s.Independent = false;
+                            var rand = new System.Random();
+                            s.SetNames(ep.FireballColor?.ToHex() ?? "none", ExtentionMethods.colorPresets.GetRandom(6).Select(x => rand.Next(4) == 0 ? x.Value.ToHex() : x.Key).ToArray());
+                            s.SetCallback((w, x, y, z) =>
+                            {
+                                if (w == UiSelectName.Status.Accepted)
+                                {
+                                    KAUICursorManager.SetDefaultCursor("Loading", true);
+                                    ep.FireballColor = x.TryParseColor(out var r) ? (Color?)r : null;
+                                    p.SaveDataReal(g =>
+                                    {
+                                        KAUICursorManager.SetDefaultCursor("Arrow", true);
+                                        Patch_SelectName.SkipNameChecks = false;
+                                        if (g.RaisedPetSetResult == RaisedPetSetResult.Success)
+                                            OnPopupClose();
+                                        else
+                                            GameUtilities.DisplayOKMessage("PfKAUIGenericDB", "Fireball colour save failed", gameObject, "OnPopupClose");
+                                    }, null, false);
+                                }
+                                else if (w == UiSelectName.Status.Closed)
+                                {
+                                    Patch_SelectName.SkipNameChecks = false;
+                                    OnPopupClose();
+                                }
+                            });
+                        }
+                        catch (Exception ex)
+                        {
+                            if (ui)
+                                Destroy(ui);
+                            Logger.LogError(ex);
+                            Patch_SelectName.SkipNameChecks = false;
+                            GameUtilities.DisplayOKMessage("PfKAUIGenericDB", "An error occured", gameObject, "OnPopupClose");
+                        }
+                    }
+                    else if (b == RsResourceLoadEvent.ERROR)
+                    {
+                        Patch_SelectName.SkipNameChecks = false;
+                        KAUICursorManager.SetDefaultCursor("Arrow", true);
+                        GameUtilities.DisplayOKMessage("PfKAUIGenericDB", "Load failed", gameObject, "OnPopupClose");
+                    }
+                }, typeof(GameObject), false, null);
+            }
             if (Input.GetKeyDown(ChangeDragonsGender) && AvAvatar.pState != AvAvatarState.PAUSED && AvAvatar.pState != AvAvatarState.NONE && AvAvatar.GetUIActive() && SanctuaryManager.pCurPetInstance)
             {
                 AvAvatar.SetUIActive(false);
@@ -356,7 +428,7 @@ namespace HandyTweaks
                 else
                 {
                     changingPet = SanctuaryManager.pCurPetInstance;
-                    GameUtilities.DisplayGenericDB("PfKAUIGenericDB", $"Are you sure you want to change {changingPet.pData.Name} to {(changingPet.pData.Gender == Gender.Male ? "fe" : "")}male?", "Change Dragon Gender", gameObject, "ChangeDragonGender", "OnPopupClose", null, "OnPopupClose",true);
+                    GameUtilities.DisplayGenericDB("PfKAUIGenericDB", $"Are you sure you want to change {changingPet.pData.Name} to {(changingPet.pData.Gender == Gender.Male ? "fe" : "")}male?", "Change Dragon Gender", gameObject, "ChangeDragonGender", "OnPopupClose", null, "OnPopupClose", true);
                 }
             }
             waitingTime += Time.deltaTime;
@@ -483,6 +555,58 @@ namespace HandyTweaks
         }
 
         public void DoNothing() { }
+
+
+        static Main()
+        {
+            if (!TomlTypeConverter.CanConvert(typeof(Dictionary<string, bool>)))
+                TomlTypeConverter.AddConverter(typeof(Dictionary<string, bool>), new TypeConverter()
+                {
+                    ConvertToObject = (str, type) =>
+                    {
+                        var d = new Dictionary<string, bool>();
+                        if (str == null)
+                            return d;
+                        var split = str.Split('|');
+                        foreach (var i in split)
+                            if (i.Length != 0)
+                            {
+                                var parts = i.Split(',');
+                                if (parts.Length != 2)
+                                    Debug.LogWarning($"Could not load entry \"{i}\". Entries must have exactly 2 values divided by commas");
+                                else
+                                {
+                                    if (d.ContainsKey(parts[0]))
+                                        Debug.LogWarning($"Duplicate entry name \"{parts[0]}\" from \"{i}\". Only last entry will be kept");
+                                    var value = false;
+                                    if (bool.TryParse(parts[1], out var v))
+                                            value = v;
+                                        else
+                                            Debug.LogWarning($"Value \"{parts[1]}\" in \"{i}\". Could not be parsed as a bool");
+                                    d[parts[0]] = value;
+                                }
+                            }
+                        return d;
+                    },
+                    ConvertToString = (obj, type) =>
+                    {
+                        if (!(obj is Dictionary<string, bool> d))
+                            return "";
+                        var str = new StringBuilder();
+                        var k = d.Keys.ToList();
+                        k.Sort();
+                        foreach (var key in k)
+                        {
+                            if (str.Length > 0)
+                                str.Append("|");
+                            str.Append(key);
+                            str.Append(",");
+                            str.Append(d[key].ToString(CultureInfo.InvariantCulture));
+                        }
+                        return str.ToString();
+                    }
+                });
+        }
     }
 
     public class CustomStatInfo
@@ -604,6 +728,76 @@ namespace HandyTweaks
                 if (itemDataRelationship.Type == "Prereq")
                     return (ParentData.pIsReady && ParentData.pInstance.HasItem(itemDataRelationship.ItemId)) || CommonInventoryData.pInstance.FindItem(itemDataRelationship.ItemId) != null;
             return true;
+        }
+        public static Dictionary<string, Color> colorPresets = typeof(Color).GetProperties().Where(x => x.PropertyType == x.DeclaringType && x.GetGetMethod(false)?.IsStatic == true).ToDictionary(x => x.Name.ToLowerInvariant(),x => (Color)x.GetValue(null));
+        public static bool TryParseColor(this string clr,out Color color)
+        {
+            clr = clr.ToLowerInvariant();
+            color = default;
+            if (colorPresets.TryGetValue(clr,out var v))
+                color = v;
+            else if (uint.TryParse(clr,NumberStyles.HexNumber,CultureInfo.InvariantCulture,out var n))
+                color = new Color32((byte)(n / 0x10000 & 0xFF), (byte)(n / 0x100 & 0xFF), (byte)(n & 0xFF), 255);
+            else
+                return false;
+            return true;
+        }
+        public static string ToHex(this Color32 color) => color.r.ToString("X2") + color.g.ToString("X2") + color.b.ToString("X2");
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static string ToHex(this Color color) => ((Color32)color).ToHex();
+        public static Color Shift(this Color oc, Color nc)
+        {
+            var s = Math.Max(Math.Max(oc[0], oc[1]), oc[2]);
+            return new Color(nc.r * s, nc.g * s, nc.b * s, nc.a * oc.a);
+        }
+        public static ParticleSystem.MinMaxGradient Shift(this ParticleSystem.MinMaxGradient o, Color newColor)
+        {
+            if (o.mode == ParticleSystemGradientMode.Color)
+                return new ParticleSystem.MinMaxGradient(o.color.Shift(newColor));
+
+            if (o.mode == ParticleSystemGradientMode.Gradient)
+                return new ParticleSystem.MinMaxGradient(new Gradient()
+                {
+                    mode = o.gradient.mode,
+                    alphaKeys = o.gradient.alphaKeys,
+                    colorKeys = o.gradient.colorKeys.Select(x => new GradientColorKey(x.color.Shift(newColor), x.time)).ToArray()
+                });
+
+            if (o.mode == ParticleSystemGradientMode.TwoColors)
+                return new ParticleSystem.MinMaxGradient(o.colorMin.Shift(newColor), o.colorMax.Shift(newColor));
+
+            if (o.mode == ParticleSystemGradientMode.TwoGradients)
+                return new ParticleSystem.MinMaxGradient(new Gradient()
+                {
+                    mode = o.gradientMin.mode,
+                    alphaKeys = o.gradientMin.alphaKeys,
+                    colorKeys = o.gradientMin.colorKeys.Select(x => new GradientColorKey(x.color.Shift(newColor), x.time)).ToArray()
+                }, new Gradient()
+                {
+                    mode = o.gradientMax.mode,
+                    alphaKeys = o.gradientMax.alphaKeys,
+                    colorKeys = o.gradientMax.colorKeys.Select(x => new GradientColorKey(x.color.Shift(newColor), x.time)).ToArray()
+                });
+
+            return o;
+        }
+        public static List<T> GetRandom<T>(this ICollection<T> c, int count)
+        {
+            var r = new System.Random();
+            var n = c.Count;
+            if (count >= n)
+                return c.ToList();
+            var l = new List<T>(count);
+            if (count > 0)
+                foreach (var i in c)
+                    if (r.Next(n--) < count)
+                    {
+                        count--;
+                        l.Add(i);
+                        if (count == 0)
+                            break;
+                    }
+            return l;
         }
     }
     public enum StatCompareResult
@@ -1269,5 +1463,116 @@ namespace HandyTweaks
     static class Patch_AddRacingCooldown
     {
         public static bool Prefix() => RacingManager.Instance.State >= RacingManagerState.RaceCountdown;
+    }
+
+    [HarmonyPatch]
+    static class Patch_ColorDragonShot
+    {
+        static MaterialPropertyBlock props = new MaterialPropertyBlock();
+        [HarmonyPatch(typeof(ObAmmo),"Activate")]
+        [HarmonyPrefix]
+        static void ActivateAmmo_Pre(ObAmmo __instance, WeaponManager inManager)
+        {
+            if (!inManager || !inManager.IsLocal || !(inManager is PetWeaponManager p) || !p.SanctuaryPet)
+                return;
+            var d = ExtendedPetData.Get(p.SanctuaryPet.pData);
+            if (d.FireballColor == null)
+                return;
+            var color = d.FireballColor.Value;
+            Debug.Log($"Changing fireball {__instance.name} to {color.ToHex()}");
+            foreach (var r in __instance.GetComponentsInChildren<Renderer>(true))
+            {
+                r.GetPropertyBlock(props);
+                foreach (var m in r.sharedMaterials)
+                    if (m && m.shader)
+                    {
+                        var c = m.shader.GetPropertyCount();
+                        for (var i = 0; i < c; i++)
+                            if (m.shader.GetPropertyType(i) == UnityEngine.Rendering.ShaderPropertyType.Color)
+                            {
+                                var n = m.shader.GetPropertyNameId(i);
+                                props.SetColor(n, m.GetColor(n).Shift(color));
+                            }
+                    }
+                r.SetPropertyBlock(props);
+            }
+            foreach (var ps in __instance.GetComponentsInChildren<ParticleSystem>(true))
+            {
+                var m = ps.main;
+                m.startColor = m.startColor.Shift(color);
+                var s = ps.colorBySpeed;
+                s.color = s.color.Shift(color);
+                var l = ps.colorOverLifetime;
+                l.color = l.color.Shift(color);
+            }
+        }
+    }
+
+    [HarmonyPatch(typeof(RaisedPetData))]
+    static class Patch_PetData
+    {
+        [HarmonyPatch("ParseResStringEx")]
+        static void Postfix(string s, RaisedPetData __instance)
+        {
+            foreach (var i in s.Split('*'))
+            {
+                var values = i.Split('$');
+                if (values.Length >= 2 && values[0] == ExtendedPetData.FIREBALLCOLOR_KEY && values[1].TryParseColor(out var color))
+                    ExtendedPetData.Get(__instance).FireballColor = color;
+            }
+        }
+        [HarmonyPatch("SaveToResStringEx")]
+        static void Postfix(RaisedPetData __instance, ref string __result)
+        {
+            var d = ExtendedPetData.Get(__instance);
+            if (d.FireballColor != null)
+            __result += ExtendedPetData.FIREBALLCOLOR_KEY + "$" + d.FireballColor.Value.ToHex() + "*";
+        }
+    }
+
+    public class ExtendedPetData
+    {
+        static ConditionalWeakTable<RaisedPetData, ExtendedPetData> table = new ConditionalWeakTable<RaisedPetData, ExtendedPetData>();
+        public static ExtendedPetData Get(RaisedPetData data) => table.GetOrCreateValue(data);
+
+        public const string FIREBALLCOLOR_KEY = "HTFC"; // Handy Tweaks Fireball Colour
+        public Color? FireballColor;
+    }
+
+    [HarmonyPatch(typeof(UiSelectName),"OnClick")]
+    static class Patch_SelectName
+    {
+        public static bool SkipNameChecks = false;
+        static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions, ILGenerator iL)
+        {
+            var code = instructions.ToList();
+            var lbl = iL.DefineLabel();
+            code[code.FindLastIndex(code.FindIndex(x => x.operand is MethodInfo m && m.Name == "get_Independent"), x => x.opcode == OpCodes.Ldarg_0)].labels.Add(lbl);
+            code.InsertRange(code.FindIndex(x => x.opcode == OpCodes.Stloc_0) + 1, new[]
+            {
+                new CodeInstruction(OpCodes.Ldsfld,AccessTools.Field(typeof(Patch_SelectName),nameof(SkipNameChecks))),
+                new CodeInstruction(OpCodes.Brtrue,lbl)
+            });
+            return code;
+        }
+    }
+
+    [HarmonyPatch(typeof(SanctuaryPet), "PetMoodParticleAllowed")]
+    static class Patch_MoodParticleAllowed
+    {
+        static void Postfix(SanctuaryPet __instance, ref bool __result)
+        {
+            var n = __instance.GetTypeInfo()._Name;
+            if (Main.DisableHappyParticles.TryGetValue(n,out var v))
+            {
+                if (v)
+                    __result = false;
+            }
+            else
+            {
+                Main.DisableHappyParticles[n] = false;
+                Main.instance.Config.Save();
+            }
+        }
     }
 }

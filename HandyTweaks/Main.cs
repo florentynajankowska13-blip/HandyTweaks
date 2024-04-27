@@ -18,10 +18,12 @@ using Object = UnityEngine.Object;
 using System.Security.Permissions;
 using Newtonsoft.Json.Linq;
 using BepInEx.Configuration;
+using System.Runtime.Remoting.Channels;
+using UnityEngine.EventSystems;
 
 namespace HandyTweaks
 {
-    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.2.1")]
+    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.3.0")]
     [BepInDependency("com.aidanamite.ConfigTweaks")]
     public class Main : BaseUnityPlugin
     {
@@ -78,6 +80,8 @@ namespace HandyTweaks
         [ConfigField]
         public static bool AlwaysShowArmourWings = false;
         [ConfigField]
+        public static bool DisableCustomColourPicker = false;
+        [ConfigField]
         public static bool CheckForModUpdates = true;
         [ConfigField]
         public static int UpdateCheckTimeout = 60;
@@ -133,6 +137,12 @@ namespace HandyTweaks
                 tT.offsetMax = new Vector2(-20, -20);
                 foreach (var plugin in Resources.FindObjectsOfTypeAll<BaseUnityPlugin>())
                     CheckModVersion(plugin);
+            }
+            using (var s = Assembly.GetExecutingAssembly().GetManifestResourceStream("HandyTweaks.colorpicker"))
+            {
+                var b = AssetBundle.LoadFromStream(s);
+                ColorPicker.UIPrefab = b.LoadAsset<GameObject>("ColorPicker");
+                b.Unload(false);
             }
             new Harmony("com.aidanamite.HandyTweaks").PatchAll();
             Logger.LogInfo("Loaded");
@@ -1586,5 +1596,161 @@ namespace HandyTweaks
             if (Main.AlwaysShowArmourWings)
                 show = true;
         }
+    }
+
+    [HarmonyPatch(typeof(UiDragonCustomization),"SetColorSelector")]
+    static class Patch_DragonCustomization
+    {
+        static void Postfix(UiDragonCustomization __instance)
+        {
+            if (Main.DisableCustomColourPicker)
+                return;
+            if (__instance.mIsUsedInJournal && !__instance.mFreeCustomization && CommonInventoryData.pInstance.GetQuantity(__instance.mUiJournalCustomization._DragonTicketItemID) <= 0)
+                return;
+            var ui = ColorPicker.OpenUI((x) =>
+            {
+                if (__instance.mSelectedColorBtn == __instance.mPrimaryColorBtn)
+                    __instance.mPrimaryColor = x;
+                else if (__instance.mSelectedColorBtn == __instance.mSecondaryColorBtn)
+                    __instance.mSecondaryColor = x;
+                else if (__instance.mSelectedColorBtn == __instance.mTertiaryColorBtn)
+                    __instance.mTertiaryColor = x;
+                __instance.mSelectedColorBtn.pBackground.color = x;
+                __instance.mRebuildTexture = true;
+                __instance.RemoveDragonSkin();
+                __instance.mIsResetAvailable = true;
+                __instance.RefreshResetBtn();
+                __instance.mMenu.mModified = true;
+            });
+            ui.Requires = () => __instance && __instance.isActiveAndEnabled && __instance.GetVisibility();
+            ui.current = __instance.mSelectedColorBtn.pBackground.color;
+        }
+    }
+
+    [HarmonyPatch(typeof(UiAvatarCustomization), "SetSkinColorPickersVisibility")]
+    static class Patch_AvatarCustomization
+    {
+        static void Postfix(UiAvatarCustomization __instance)
+        {
+            if (Main.DisableCustomColourPicker)
+                return;
+            var ui = ColorPicker.OpenUI((x) =>
+            {
+                __instance.mSelectedColorBtn.pBackground.color = x;
+                __instance.SetColor(x);
+            });
+            ui.Requires = () =>
+                __instance
+                && __instance.isActiveAndEnabled
+                && __instance.GetVisibility()
+                && (
+                    (__instance.pColorPalette && __instance.pColorPalette.GetVisibility())
+                    ||
+                    (__instance.mSkinColorPalette && __instance.mSkinColorPalette.GetVisibility())
+                );
+            ui.current = __instance.mSelectedColorBtn.pBackground.color;
+        }
+    }
+
+    public class ColorPicker : MonoBehaviour, IPointerEnterHandler, IPointerExitHandler
+    {
+        public Image Display;
+        public (Slider slider, InputField input) Red;
+        public (Slider slider, InputField input) Green;
+        public (Slider slider, InputField input) Blue;
+        (Slider slider, InputField input) this[int channel] => channel == 0 ? Red : channel == 1 ? Green : channel == 2 ? Blue : default;
+        public Button Close;
+        public event Action<Color> OnChange;
+        public event Action OnClose;
+        public Func<bool> Requires;
+
+        KAUI handle;
+        Color _c;
+        public Color current
+        {
+            get => _c;
+            set
+            {
+                updating = true;
+                _c = value;
+                for (int i = 0; i < 3; i++)
+                {
+                    this[i].slider.value = _c[i];
+                    this[i].input.text = Math.Round(_c[i] * 255).ToString();
+                }
+                Display.color = _c;
+                updating = false;
+                OnChange?.Invoke(_c);
+            }
+        }
+        T GetComponent<T>(string path) where T : Component => transform.Find(path).GetComponent<T>();
+        void Awake()
+        {
+            handle = gameObject.AddComponent<KAUI>();
+
+            Display = GetComponent<Image>("ColorView");
+            Red = (GetComponent<Slider>("RInputs/Slider"), GetComponent<InputField>("RInputs/Input"));
+            Green = (GetComponent<Slider>("GInputs/Slider"), GetComponent<InputField>("GInputs/Input"));
+            Blue = (GetComponent<Slider>("BInputs/Slider"), GetComponent<InputField>("BInputs/Input"));
+            Close = GetComponent<Button>("CloseButton");
+
+            Close.onClick.AddListener(CloseUI);
+            Red.slider.onValueChanged.AddListener((x) => UpdateColor(0, x, false));
+            Green.slider.onValueChanged.AddListener((x) => UpdateColor(1, x, false));
+            Blue.slider.onValueChanged.AddListener((x) => UpdateColor(2, x, false));
+            Red.input.onValueChanged.AddListener((x) => UpdateColor(0, int.TryParse(x, out var v) ? v / 255f : 0, text: false));
+            Green.input.onValueChanged.AddListener((x) => UpdateColor(1, int.TryParse(x, out var v) ? v / 255f : 0, text: false));
+            Blue.input.onValueChanged.AddListener((x) => UpdateColor(2, int.TryParse(x, out var v) ? v / 255f : 0, text: false));
+        }
+        void IPointerEnterHandler.OnPointerEnter(PointerEventData eventData)
+        {
+            KAUI.SetExclusive(handle);
+        }
+        void IPointerExitHandler.OnPointerExit(PointerEventData eventData)
+        {
+            KAUI.RemoveExclusive(handle);
+        }
+        void CloseUI()
+        {
+            Destroy(GetComponentInParent<Canvas>().gameObject);
+        }
+        void OnDestroy()
+        {
+            KAUI.RemoveExclusive(GetComponent<KAUI>());
+            OnClose?.Invoke();
+        }
+        bool updating = false;
+        void UpdateColor(byte channel, float newValue, bool slider = true, bool text = true)
+        {
+            if (updating)
+                return;
+            updating = true;
+            if (slider)
+                this[channel].slider.value = newValue;
+            if (text)
+                this[channel].input.text = Math.Round(newValue * 255).ToString();
+            _c[channel] = newValue;
+            Display.color = _c;
+            updating = false;
+            OnChange?.Invoke(_c);
+        }
+        void Update()
+        {
+            if (Input.GetKeyUp(KeyCode.Escape) && KAUI._GlobalExclusiveUI == handle)
+                CloseUI();
+            if (Requires != null && !Requires())
+                CloseUI();
+        }
+
+        public static GameObject UIPrefab;
+        static ColorPicker open;
+        public static ColorPicker OpenUI(Action<Color> onChange = null, Action onClose = null)
+        {
+            if (!open)
+                open = Instantiate(UIPrefab).transform.Find("Picker").gameObject.AddComponent<ColorPicker>();
+            open.OnChange = onChange;
+            open.OnClose = onClose;
+            return open;
+        } 
     }
 }

@@ -21,7 +21,7 @@ using BepInEx.Configuration;
 
 namespace HandyTweaks
 {
-    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.2.0")]
+    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.2.1")]
     [BepInDependency("com.aidanamite.ConfigTweaks")]
     public class Main : BaseUnityPlugin
     {
@@ -75,6 +75,8 @@ namespace HandyTweaks
         public static KeyCode ChangeDragonFireballColour = KeyCode.KeypadMultiply;
         [ConfigField]
         public static Dictionary<string, bool> DisableHappyParticles = new Dictionary<string, bool>();
+        [ConfigField]
+        public static bool AlwaysShowArmourWings = false;
         [ConfigField]
         public static bool CheckForModUpdates = true;
         [ConfigField]
@@ -1573,6 +1575,16 @@ namespace HandyTweaks
                 Main.DisableHappyParticles[n] = false;
                 Main.instance.Config.Save();
             }
+        }
+    }
+
+    [HarmonyPatch(typeof(AvAvatarController), "ShowArmorWing")]
+    static class Patch_ArmorWingsVisible
+    {
+        static void Prefix(ref bool show)
+        {
+            if (Main.AlwaysShowArmourWings)
+                show = true;
         }
     }
 }

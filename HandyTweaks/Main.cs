@@ -23,7 +23,7 @@ using UnityEngine.EventSystems;
 
 namespace HandyTweaks
 {
-    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.3.0")]
+    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.4.0")]
     [BepInDependency("com.aidanamite.ConfigTweaks")]
     public class Main : BaseUnityPlugin
     {
@@ -48,15 +48,11 @@ namespace HandyTweaks
         [ConfigField]
         public static bool ShowRacingEquipmentStats = false;
         [ConfigField]
-        public static KeyCode ChangeDragonsGender = KeyCode.Equals;
-        [ConfigField]
         public static bool InfiniteZoom = false;
         [ConfigField]
         public static float ZoomSpeed = 1;
         [ConfigField]
         public static bool DisableDragonAutomaticSkinUnequip = true;
-        [ConfigField]
-        public static bool ApplyDragonPrimaryToEmission = false;
         [ConfigField]
         public static bool AllowCustomizingSpecialDragons = false;
         [ConfigField]
@@ -73,8 +69,6 @@ namespace HandyTweaks
         public static bool AutomaticFireballs = true;
         [ConfigField]
         public static bool AlwaysMaxHappiness = false;
-        [ConfigField]
-        public static KeyCode ChangeDragonFireballColour = KeyCode.KeypadMultiply;
         [ConfigField]
         public static Dictionary<string, bool> DisableHappyParticles = new Dictionary<string, bool>();
         [ConfigField]
@@ -366,83 +360,6 @@ namespace HandyTweaks
                         }
                     }
             }
-            if (Input.GetKeyDown(ChangeDragonFireballColour) && AvAvatar.pState != AvAvatarState.PAUSED && AvAvatar.pState != AvAvatarState.NONE && AvAvatar.GetUIActive() && SanctuaryManager.pCurPetInstance)
-            {
-                AvAvatar.SetUIActive(false);
-                AvAvatar.pState = AvAvatarState.PAUSED;
-                var p = SanctuaryManager.pCurPetInstance.pData;
-                var ep = ExtendedPetData.Get(p);
-                KAUICursorManager.SetDefaultCursor("Loading", true);
-                Patch_SelectName.SkipNameChecks = true;
-                RsResourceManager.LoadAssetFromBundle(GameConfig.GetKeyData("SelectNameAsset"), (a,b,c,d,e) =>
-                {
-                    if (b == RsResourceLoadEvent.COMPLETE)
-                    {
-                        KAUICursorManager.SetDefaultCursor("Arrow", true);
-                        GameObject ui = null;
-                        try
-                        {
-                            ui = Instantiate((GameObject)d);
-                            var s = ui.GetComponent<UiSelectName>();
-                            s.FindItem("TxtTitle").SetText("Select your fireball colour");
-                            s.FindItem("TxtHint").SetText("Enter colour here");
-                            s.FindItem("TxtSugestedNames").SetText("Suggested colours:");
-                            s.FindItem("TxtStatus").SetText("Colour may be either a simple colour name or hex number");
-                            s.Independent = false;
-                            var rand = new System.Random();
-                            s.SetNames(ep.FireballColor?.ToHex() ?? "none", ExtentionMethods.colorPresets.GetRandom(6).Select(x => rand.Next(4) == 0 ? x.Value.ToHex() : x.Key).ToArray());
-                            s.SetCallback((w, x, y, z) =>
-                            {
-                                if (w == UiSelectName.Status.Accepted)
-                                {
-                                    KAUICursorManager.SetDefaultCursor("Loading", true);
-                                    ep.FireballColor = x.TryParseColor(out var r) ? (Color?)r : null;
-                                    p.SaveDataReal(g =>
-                                    {
-                                        KAUICursorManager.SetDefaultCursor("Arrow", true);
-                                        Patch_SelectName.SkipNameChecks = false;
-                                        if (g.RaisedPetSetResult == RaisedPetSetResult.Success)
-                                            OnPopupClose();
-                                        else
-                                            GameUtilities.DisplayOKMessage("PfKAUIGenericDB", "Fireball colour save failed", gameObject, "OnPopupClose");
-                                    }, null, false);
-                                }
-                                else if (w == UiSelectName.Status.Closed)
-                                {
-                                    Patch_SelectName.SkipNameChecks = false;
-                                    OnPopupClose();
-                                }
-                            });
-                        }
-                        catch (Exception ex)
-                        {
-                            if (ui)
-                                Destroy(ui);
-                            Logger.LogError(ex);
-                            Patch_SelectName.SkipNameChecks = false;
-                            GameUtilities.DisplayOKMessage("PfKAUIGenericDB", "An error occured", gameObject, "OnPopupClose");
-                        }
-                    }
-                    else if (b == RsResourceLoadEvent.ERROR)
-                    {
-                        Patch_SelectName.SkipNameChecks = false;
-                        KAUICursorManager.SetDefaultCursor("Arrow", true);
-                        GameUtilities.DisplayOKMessage("PfKAUIGenericDB", "Load failed", gameObject, "OnPopupClose");
-                    }
-                }, typeof(GameObject), false, null);
-            }
-            if (Input.GetKeyDown(ChangeDragonsGender) && AvAvatar.pState != AvAvatarState.PAUSED && AvAvatar.pState != AvAvatarState.NONE && AvAvatar.GetUIActive() && SanctuaryManager.pCurPetInstance)
-            {
-                AvAvatar.SetUIActive(false);
-                AvAvatar.pState = AvAvatarState.PAUSED;
-                if (SanctuaryManager.pCurPetInstance.pData.Gender != Gender.Male && SanctuaryManager.pCurPetInstance.pData.Gender != Gender.Female)
-                    GameUtilities.DisplayOKMessage("PfKAUIGenericDB", $"{SanctuaryManager.pCurPetInstance.pData.Name} does not have a gender. Unable to change it", gameObject, "OnPopupClose");
-                else
-                {
-                    changingPet = SanctuaryManager.pCurPetInstance;
-                    GameUtilities.DisplayGenericDB("PfKAUIGenericDB", $"Are you sure you want to change {changingPet.pData.Name} to {(changingPet.pData.Gender == Gender.Male ? "fe" : "")}male?", "Change Dragon Gender", gameObject, "ChangeDragonGender", "OnPopupClose", null, "OnPopupClose", true);
-                }
-            }
             waitingTime += Time.deltaTime;
             if (waitingText)
             {
@@ -471,15 +388,6 @@ namespace HandyTweaks
                 if (cur < max)
                     SanctuaryManager.pCurPetInstance.UpdateMeter(SanctuaryPetMeterType.HAPPINESS, max - cur);
             }
-        }
-        SanctuaryPet changingPet;
-        void ChangeDragonGender()
-        {
-            if (!changingPet || changingPet.pData == null)
-                return;
-            changingPet.pData.Gender = changingPet.pData.Gender == Gender.Male ? Gender.Female : Gender.Male;
-            changingPet.SaveData();
-            OnPopupClose();
         }
         void OnPopupClose()
         {
@@ -811,12 +719,54 @@ namespace HandyTweaks
                     }
             return l;
         }
+        public static Vector2 Rotate(this Vector2 v, float delta, Vector2 center = default)
+        {
+            if (center != default)
+                v -= center;
+            v = new Vector2(
+                v.x * Mathf.Cos(delta) - v.y * Mathf.Sin(delta),
+                v.x * Mathf.Sin(delta) + v.y * Mathf.Cos(delta)
+            );
+            if (center != default)
+                v += center;
+            return v;
+        }
+        public static bool TryParseColor(this string[] values, out Color result, int start = 0)
+        {
+            if (values != null
+                && values.Length >= start + 3
+                && values[start] != null && int.TryParse(values[start], out var r)
+                && values[start + 1] != null && int.TryParse(values[start + 1], out var g)
+                && values[start + 2] != null && int.TryParse(values[start + 2], out var b))
+            {
+                result = new Color(r / 255f, g / 255f, b / 255f);
+                return true;
+            }
+            result = default;
+            return false;
+        }
+        public static string JoinValues(this Color c, string delimeter = "$") => (int)Math.Round(c.r * 255.0) + delimeter + (int)Math.Round(c.g * 255.0) + delimeter + (int)Math.Round(c.b * 255.0);
     }
     public enum StatCompareResult
     {
         Equal,
         Greater,
         Lesser
+    }
+
+    public abstract class ExtendedClass<X, Y> where X : ExtendedClass<X, Y>, new() where Y : class
+    {
+        static ConditionalWeakTable<Y, X> table = new ConditionalWeakTable<Y, X>();
+        public static X Get(Y instance)
+        {
+            if (table.TryGetValue(instance, out var v))
+                return v;
+            v = new X();
+            table.Add(instance, v);
+            v.OnCreate(instance);
+            return v;
+        }
+        protected virtual void OnCreate(Y instance) { }
     }
 
     [HarmonyPatch(typeof(UiMyRoomBuilder), "Update")]
@@ -1048,7 +998,7 @@ namespace HandyTweaks
             foreach (var p in e)
             {
                 var item2 = p.Value.Item2 ?? p.Value.Item1;
-                Debug.Log($"\n{p.Key}\n - [{p.Value.Item1?.Attribute?.Join(x => x.Key + "=" + x.Value)}]\n - [{item2?.Attribute?.Join(x => x.Key + "=" + x.Value)}]");
+                //Debug.Log($"\n{p.Key}\n - [{p.Value.Item1?.Attribute?.Join(x => x.Key + "=" + x.Value)}]\n - [{item2?.Attribute?.Join(x => x.Key + "=" + x.Value)}]");
                 if (p.Value.Item1?.Attribute != null)
                     foreach (var a in p.Value.Item1.Attribute)
                     {
@@ -1241,19 +1191,20 @@ namespace HandyTweaks
             code.InsertRange(code.FindIndex(x => x.opcode == OpCodes.Ldloc_S && ((x.operand is LocalBuilder l && l.LocalIndex == 6) || (x.operand is IConvertible i && i.ToInt32(CultureInfo.InvariantCulture) == 6))) + 1,
                 new[] 
                 {
-                    new CodeInstruction(OpCodes.Ldloc_0),
+                    new CodeInstruction(OpCodes.Ldarg_0),
                     new CodeInstruction(OpCodes.Call, AccessTools.Method(typeof(Patch_UpdatePetShaders), nameof(EditMat)))
                 });
             return code;
         }
-        static Material EditMat(Material material, Color primary)
+        static Material EditMat(Material material, SanctuaryPet pet)
         {
             if (material.HasProperty("_EmissiveColor"))
             {
-                if (Main.ApplyDragonPrimaryToEmission)
+                var pe = ExtendedPetData.Get(pet.pData);
+                if (pe.EmissionColor != null)
                 {
                     var e = MaterialEdit.Get(material).OriginalEmissive;
-                    material.SetColor("_EmissiveColor", new Color(primary.r * e.strength, primary.g * e.strength, primary.b * e.strength, primary.a * e.alpha));
+                    material.SetColor("_EmissiveColor", new Color(pe.EmissionColor.Value.r * e.strength, pe.EmissionColor.Value.g * e.strength, pe.EmissionColor.Value.b * e.strength, pe.EmissionColor.Value.a * e.alpha));
                 }
                 else
                     material.SetColor("_EmissiveColor", MaterialEdit.Get(material).OriginalEmissive.original);
@@ -1491,7 +1442,7 @@ namespace HandyTweaks
             if (d.FireballColor == null)
                 return;
             var color = d.FireballColor.Value;
-            Debug.Log($"Changing fireball {__instance.name} to {color.ToHex()}");
+            //Debug.Log($"Changing fireball {__instance.name} to {color.ToHex()}");
             foreach (var r in __instance.GetComponentsInChildren<Renderer>(true))
             {
                 r.GetPropertyBlock(props);
@@ -1529,8 +1480,15 @@ namespace HandyTweaks
             foreach (var i in s.Split('*'))
             {
                 var values = i.Split('$');
-                if (values.Length >= 2 && values[0] == ExtendedPetData.FIREBALLCOLOR_KEY && values[1].TryParseColor(out var color))
-                    ExtendedPetData.Get(__instance).FireballColor = color;
+                if (values.Length >= 2 && values[0] == ExtendedPetData.FIREBALLCOLOR_KEY)
+                {
+                    if (values.TryParseColor(out var c, 1))
+                        ExtendedPetData.Get(__instance).FireballColor = c;
+                    else if (values[1].TryParseColor(out c))
+                        ExtendedPetData.Get(__instance).FireballColor = c;
+                }
+                else if (values.TryParseColor(out var c, 1))
+                        ExtendedPetData.Get(__instance).EmissionColor = c;
             }
         }
         [HarmonyPatch("SaveToResStringEx")]
@@ -1538,17 +1496,51 @@ namespace HandyTweaks
         {
             var d = ExtendedPetData.Get(__instance);
             if (d.FireballColor != null)
-            __result += ExtendedPetData.FIREBALLCOLOR_KEY + "$" + d.FireballColor.Value.ToHex() + "*";
+                __result += ExtendedPetData.FIREBALLCOLOR_KEY + "$" + d.FireballColor.Value.JoinValues() + "*";
+            if (d.EmissionColor != null)
+                __result += ExtendedPetData.EMISSIONCOLOR_KEY + "$" + d.EmissionColor.Value.JoinValues() + "*";
+        }
+        [HarmonyPatch("SaveDataReal")]
+        static void Prefix(RaisedPetData __instance)
+        {
+            var d = ExtendedPetData.Get(__instance);
+            if (d.EmissionColor == null)
+                __instance.RemoveAttrData(ExtendedPetData.EMISSIONCOLOR_KEY);
+            else
+                __instance.SetAttrData(ExtendedPetData.EMISSIONCOLOR_KEY, d.EmissionColor.Value.JoinValues(), DataType.STRING);
+
+            if (d.FireballColor == null)
+                __instance.RemoveAttrData(ExtendedPetData.FIREBALLCOLOR_KEY);
+            else
+                __instance.SetAttrData(ExtendedPetData.FIREBALLCOLOR_KEY, d.FireballColor.Value.JoinValues(), DataType.STRING);
+        }
+        [HarmonyPatch("ResolveLoadedData")]
+        static void Postfix(RaisedPetData __instance)
+        {
+            var d = ExtendedPetData.Get(__instance);
+            var a = __instance.FindAttrData(ExtendedPetData.FIREBALLCOLOR_KEY);
+            if (a?.Value != null && a.Type == DataType.STRING)
+            {
+                var values = a.Value.Split('$');
+                if (values.TryParseColor(out var c))
+                    d.FireballColor = c;
+            }
+            a = __instance.FindAttrData(ExtendedPetData.EMISSIONCOLOR_KEY);
+            if (a?.Value != null && a.Type == DataType.STRING)
+            {
+                var values = a.Value.Split('$');
+                if (values.TryParseColor(out var c))
+                    d.EmissionColor = c;
+            }
         }
     }
 
-    public class ExtendedPetData
+    public class ExtendedPetData : ExtendedClass<ExtendedPetData,RaisedPetData>
     {
-        static ConditionalWeakTable<RaisedPetData, ExtendedPetData> table = new ConditionalWeakTable<RaisedPetData, ExtendedPetData>();
-        public static ExtendedPetData Get(RaisedPetData data) => table.GetOrCreateValue(data);
-
         public const string FIREBALLCOLOR_KEY = "HTFC"; // Handy Tweaks Fireball Colour
         public Color? FireballColor;
+        public const string EMISSIONCOLOR_KEY = "HTEC"; // Handy Tweaks Emission Colour
+        public Color? EmissionColor;
     }
 
     [HarmonyPatch(typeof(UiSelectName),"OnClick")]
@@ -1598,14 +1590,16 @@ namespace HandyTweaks
         }
     }
 
-    [HarmonyPatch(typeof(UiDragonCustomization),"SetColorSelector")]
+    [HarmonyPatch(typeof(UiDragonCustomization))]
     static class Patch_DragonCustomization
     {
-        static void Postfix(UiDragonCustomization __instance)
+        [HarmonyPatch("SetColorSelector")]
+        [HarmonyPostfix]
+        static void SetColorSelector(UiDragonCustomization __instance)
         {
             if (Main.DisableCustomColourPicker)
                 return;
-            if (__instance.mIsUsedInJournal && !__instance.mFreeCustomization && CommonInventoryData.pInstance.GetQuantity(__instance.mUiJournalCustomization._DragonTicketItemID) <= 0)
+            if (__instance.mIsUsedInJournal && !ExtendedDragonCustomization.FreeCustomization(__instance.mFreeCustomization, __instance) && CommonInventoryData.pInstance.GetQuantity(__instance.mUiJournalCustomization._DragonTicketItemID) <= 0)
                 return;
             var ui = ColorPicker.OpenUI((x) =>
             {
@@ -1615,6 +1609,14 @@ namespace HandyTweaks
                     __instance.mSecondaryColor = x;
                 else if (__instance.mSelectedColorBtn == __instance.mTertiaryColorBtn)
                     __instance.mTertiaryColor = x;
+                else
+                {
+                    var e = ExtendedDragonCustomization.Get(__instance);
+                    if (__instance.mSelectedColorBtn == e.emissionColorBtn)
+                        e.emissionColor = x;
+                    else if (__instance.mSelectedColorBtn == e.fireballColorBtn)
+                        e.fireballColor = x;
+                }
                 __instance.mSelectedColorBtn.pBackground.color = x;
                 __instance.mRebuildTexture = true;
                 __instance.RemoveDragonSkin();
@@ -1624,6 +1626,208 @@ namespace HandyTweaks
             });
             ui.Requires = () => __instance && __instance.isActiveAndEnabled && __instance.GetVisibility();
             ui.current = __instance.mSelectedColorBtn.pBackground.color;
+        }
+
+        [HarmonyPatch("SetColorSelector")]
+        [HarmonyTranspiler]
+        static IEnumerable<CodeInstruction> SetColorSelector(IEnumerable<CodeInstruction> instructions)
+        {
+            var code = instructions.ToList();
+            code.InsertRange(code.FindIndex(x => x.operand is MethodInfo m && m.Name == "get_white")+ 1, new[]
+            {
+                new CodeInstruction(OpCodes.Ldarg_0),
+                new CodeInstruction(OpCodes.Call,AccessTools.Method(typeof(ExtendedDragonCustomization),nameof(ExtendedDragonCustomization.GetSelectedColor)))
+            });
+            return code;
+        }
+
+        [HarmonyPatch("UpdateCustomizationUI")]
+        [HarmonyPrefix]
+        static void UpdateCustomizationUI(UiDragonCustomization __instance) => ExtendedDragonCustomization.Get(__instance);
+
+        [HarmonyPatch("OnClick")]
+        [HarmonyPostfix]
+        static void OnClick(UiDragonCustomization __instance, KAWidget inItem)
+        {
+            var e = ExtendedDragonCustomization.Get(__instance);
+            if (inItem == e.emissionColorBtn || inItem == e.fireballColorBtn)
+            {
+                __instance.mSelectedColorBtn = inItem;
+                __instance.SetColorSelector();
+            }
+        }
+
+        [HarmonyPatch("RefreshUI")]
+        [HarmonyPostfix]
+        static void RefreshUI(UiDragonCustomization __instance)
+        {
+            bool flag = SanctuaryData.GetPetCustomizationType(__instance.pPetData) == PetCustomizationType.Default;
+            __instance.mToggleBtnMale.SetVisibility(flag);
+            __instance.mToggleBtnFemale.SetVisibility(flag);
+        }
+
+        [HarmonyPatch("OnPressRepeated")]
+        [HarmonyTranspiler]
+        static IEnumerable<CodeInstruction> OnPressRepeated(IEnumerable<CodeInstruction> instructions)
+        {
+            var code = instructions.ToList();
+            code.InsertRange(code.FindIndex(x => x.operand is FieldInfo f && f.Name == "mFreeCustomization") + 1, new[]
+            {
+                new CodeInstruction(OpCodes.Ldarg_0),
+                new CodeInstruction(OpCodes.Call,AccessTools.Method(typeof(ExtendedDragonCustomization),nameof(ExtendedDragonCustomization.FreeCustomization)))
+            });
+            code.InsertRange(code.FindIndex(x => x.opcode == OpCodes.Ldfld && x.operand is FieldInfo f && f.Name == "mRebuildTexture"), new[]
+            {
+                new CodeInstruction(OpCodes.Ldloc_S,10),
+                new CodeInstruction(OpCodes.Call,AccessTools.Method(typeof(ExtendedDragonCustomization),nameof(ExtendedDragonCustomization.OnPaletteClick)))
+            });
+            return code;
+        }
+
+        [HarmonyPatch("OnCloseCustomization")]
+        [HarmonyTranspiler]
+        static IEnumerable<CodeInstruction> OnCloseCustomization(IEnumerable<CodeInstruction> instructions)
+        {
+            var code = instructions.ToList();
+            for (int i = code.Count - 1; i >= 0; i--)
+                if (code[i].operand is MethodInfo m && m.Name == "SetColors" && m.DeclaringType == typeof(SanctuaryPet))
+                {
+                    code.RemoveAt(i);
+                    code.InsertRange(i, new[]
+                    {
+                        new CodeInstruction(OpCodes.Ldarg_0),
+                        new CodeInstruction(OpCodes.Call, AccessTools.Method(typeof(ExtendedDragonCustomization),nameof(ExtendedDragonCustomization.StoreValues)))
+                    });
+                }
+            return code;
+        }
+        [HarmonyPatch("Update")]
+        [HarmonyTranspiler]
+        static IEnumerable<CodeInstruction> Update(IEnumerable<CodeInstruction> instructions) => OnCloseCustomization(instructions);
+
+        [HarmonyPatch("Update")]
+        [HarmonyPostfix] 
+        static void Update(UiDragonCustomization __instance)
+        {
+            if (Input.GetMouseButtonDown(1))
+            {
+                var e = ExtendedDragonCustomization.Get(__instance);
+                var flag = false;
+                if (KAUI.GetGlobalMouseOverItem() == e.emissionColorBtn)
+                {
+                    e.emissionColor = null;
+                    e.emissionColorBtn.pBackground.color = ExtendedDragonCustomization.NullColorFallback;
+                    flag = true;
+                }
+                else if (KAUI.GetGlobalMouseOverItem() == e.fireballColorBtn)
+                {
+                    e.fireballColor = null;
+                    e.fireballColorBtn.pBackground.color = ExtendedDragonCustomization.NullColorFallback;
+                    flag = true;
+                }
+                if (flag)
+                {
+                    __instance.mRebuildTexture = true;
+                    __instance.RemoveDragonSkin();
+                    __instance.mMenu.mModified = true;
+                }
+            }
+        }
+    }
+
+    public class ExtendedDragonCustomization : ExtendedClass<ExtendedDragonCustomization,UiDragonCustomization>
+    {
+        public static Color NullColorFallback = new Color(0, 0, 0, 0.5f);
+        UiDragonCustomization ui;
+        public KAWidget emissionColorBtn;
+        public KAWidget fireballColorBtn;
+        public Color? emissionColor;
+        public Color? fireballColor;
+        protected override void OnCreate(UiDragonCustomization instance)
+        {
+            ui = instance;
+            var e = ExtendedPetData.Get(instance.pPetData);
+            emissionColor = e.EmissionColor;
+            fireballColor = e.FireballColor;
+            var p1 = (Vector2)instance.mPrimaryColorBtn.GetPosition();
+            var p2 = (Vector2)instance.mSecondaryColorBtn.GetPosition();
+            var p3 = (Vector2)instance.mTertiaryColorBtn.GetPosition();
+            var p4 = p2.Rotate(-60 * Mathf.Deg2Rad, p1);
+            var p5 = p3.Rotate(-60 * Mathf.Deg2Rad, p2);
+            var p6 = (Vector2)instance.mBtnChangeName.GetPosition();
+            var p7 = instance.mBtnChangeName.pBackground.height;
+
+            emissionColorBtn = instance.DuplicateWidget(instance.mPrimaryColorBtn, instance.mPrimaryColorBtn.pAnchor.side);
+            emissionColorBtn.transform.SetParent( instance.mPrimaryColorBtn.transform.parent);
+            emissionColorBtn.SetPosition(p4.x, p4.y);
+            emissionColorBtn.SetVisibility(true);
+            emissionColorBtn.SetState(KAUIState.INTERACTIVE);
+
+            fireballColorBtn = instance.DuplicateWidget(instance.mPrimaryColorBtn, instance.mPrimaryColorBtn.pAnchor.side);
+            fireballColorBtn.transform.SetParent(instance.mPrimaryColorBtn.transform.parent);
+            fireballColorBtn.SetPosition(p5.x, p5.y);
+            fireballColorBtn.SetVisibility(true);
+            fireballColorBtn.SetState(KAUIState.INTERACTIVE);
+
+            if (!instance.mIsCreationUI)
+            {
+                var o = -instance.mToggleBtnMale.pBackground.height * 1.5f;
+                var p = instance.mToggleBtnMale.GetPosition();
+                instance.mToggleBtnMale.SetPosition( p.x, p.y + o);
+                p = instance.mToggleBtnFemale.GetPosition();
+                instance.mToggleBtnFemale.SetPosition(p.x, p.y + o);
+            }
+
+            emissionColorBtn.SetText("Glow");
+            emissionColorBtn.pBackground.color = emissionColor ?? NullColorFallback;
+            fireballColorBtn.SetText("Fireball");
+            fireballColorBtn.pBackground.color = fireballColor ?? NullColorFallback;
+        } 
+
+        public static Color GetSelectedColor(Color fallback, UiDragonCustomization instance)
+        {
+            var e = Get(instance);
+            if (instance.mSelectedColorBtn == e.emissionColorBtn)
+                return e.emissionColor ?? Color.black;
+            if (instance.mSelectedColorBtn == e.fireballColorBtn)
+                return e.fireballColor ?? Color.black;
+            return fallback;
+        }
+
+        public static bool FreeCustomization(bool fallback, UiDragonCustomization instance)
+        {
+            if (fallback)
+                return true;
+            var e = Get(instance);
+            return instance.mSelectedColorBtn == e.emissionColorBtn || instance.mSelectedColorBtn == e.fireballColorBtn;
+        }
+
+        public static UiDragonCustomization OnPaletteClick(UiDragonCustomization instance, Color color)
+        {
+            var e = Get(instance);
+            if (instance.mSelectedColorBtn == e.emissionColorBtn)
+            {
+                e.emissionColor = color;
+                instance.mRebuildTexture = true;
+            }
+            else if (instance.mSelectedColorBtn == e.fireballColorBtn)
+            {
+                e.fireballColor = color;
+                instance.mRebuildTexture = true;
+            }
+            return instance;
+        }
+
+        public static void StoreValues(SanctuaryPet pet, Color a, Color b, Color c, bool save, UiDragonCustomization ui)
+        {
+            var uie = Get(ui);
+            var pe = ExtendedPetData.Get(ui.pPetData);
+            pe.EmissionColor = uie.emissionColor;
+            pe.FireballColor = uie.fireballColor;
+            pe = ExtendedPetData.Get(pet.pData);
+            pe.EmissionColor = uie.emissionColor;
+            pe.FireballColor = uie.fireballColor;
+            pet.SetColors(a,b,c,save);
         }
     }
 
@@ -1673,6 +1877,7 @@ namespace HandyTweaks
             {
                 updating = true;
                 _c = value;
+                _c.a = 1;
                 for (int i = 0; i < 3; i++)
                 {
                     this[i].slider.value = _c[i];

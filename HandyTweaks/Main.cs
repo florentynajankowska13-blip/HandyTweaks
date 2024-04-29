@@ -23,7 +23,7 @@ using UnityEngine.EventSystems;
 
 namespace HandyTweaks
 {
-    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.4.0")]
+    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.4.1")]
     [BepInDependency("com.aidanamite.ConfigTweaks")]
     public class Main : BaseUnityPlugin
     {
@@ -1754,8 +1754,6 @@ namespace HandyTweaks
             var p3 = (Vector2)instance.mTertiaryColorBtn.GetPosition();
             var p4 = p2.Rotate(-60 * Mathf.Deg2Rad, p1);
             var p5 = p3.Rotate(-60 * Mathf.Deg2Rad, p2);
-            var p6 = (Vector2)instance.mBtnChangeName.GetPosition();
-            var p7 = instance.mBtnChangeName.pBackground.height;
 
             emissionColorBtn = instance.DuplicateWidget(instance.mPrimaryColorBtn, instance.mPrimaryColorBtn.pAnchor.side);
             emissionColorBtn.transform.SetParent( instance.mPrimaryColorBtn.transform.parent);
@@ -1769,13 +1767,13 @@ namespace HandyTweaks
             fireballColorBtn.SetVisibility(true);
             fireballColorBtn.SetState(KAUIState.INTERACTIVE);
 
-            if (!instance.mIsCreationUI)
+            if (!instance.mIsCreationUI && !(string.IsNullOrEmpty(instance.pPetData.FindAttrData("_LastCustomizedStage")?.Value)))
             {
                 var o = -instance.mToggleBtnMale.pBackground.height * 1.5f;
                 var p = instance.mToggleBtnMale.GetPosition();
-                instance.mToggleBtnMale.SetPosition( p.x, p.y + o);
+                instance.mToggleBtnMale.SetPosition( p.x + o, p.y + o);
                 p = instance.mToggleBtnFemale.GetPosition();
-                instance.mToggleBtnFemale.SetPosition(p.x, p.y + o);
+                instance.mToggleBtnFemale.SetPosition(p.x + o, p.y + o);
             }
 
             emissionColorBtn.SetText("Glow");

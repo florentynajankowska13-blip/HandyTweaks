@@ -20,10 +20,11 @@ using Newtonsoft.Json.Linq;
 using BepInEx.Configuration;
 using System.Runtime.Remoting.Channels;
 using UnityEngine.EventSystems;
+using JSGames.UI;
 
 namespace HandyTweaks
 {
-    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.4.1")]
+    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.4.2")]
     [BepInDependency("com.aidanamite.ConfigTweaks")]
     public class Main : BaseUnityPlugin
     {
@@ -1431,44 +1432,38 @@ namespace HandyTweaks
     [HarmonyPatch]
     static class Patch_ColorDragonShot
     {
-        static MaterialPropertyBlock props = new MaterialPropertyBlock();
         [HarmonyPatch(typeof(ObAmmo),"Activate")]
         [HarmonyPrefix]
         static void ActivateAmmo_Pre(ObAmmo __instance, WeaponManager inManager)
         {
-            if (!inManager || !inManager.IsLocal || !(inManager is PetWeaponManager p) || !p.SanctuaryPet)
-                return;
-            var d = ExtendedPetData.Get(p.SanctuaryPet.pData);
-            if (d.FireballColor == null)
-                return;
-            var color = d.FireballColor.Value;
-            //Debug.Log($"Changing fireball {__instance.name} to {color.ToHex()}");
-            foreach (var r in __instance.GetComponentsInChildren<Renderer>(true))
-            {
-                r.GetPropertyBlock(props);
-                foreach (var m in r.sharedMaterials)
-                    if (m && m.shader)
-                    {
-                        var c = m.shader.GetPropertyCount();
-                        for (var i = 0; i < c; i++)
-                            if (m.shader.GetPropertyType(i) == UnityEngine.Rendering.ShaderPropertyType.Color)
-                            {
-                                var n = m.shader.GetPropertyNameId(i);
-                                props.SetColor(n, m.GetColor(n).Shift(color));
-                            }
-                    }
-                r.SetPropertyBlock(props);
-            }
-            foreach (var ps in __instance.GetComponentsInChildren<ParticleSystem>(true))
-            {
-                var m = ps.main;
-                m.startColor = m.startColor.Shift(color);
-                var s = ps.colorBySpeed;
-                s.color = s.color.Shift(color);
-                var l = ps.colorOverLifetime;
-                l.color = l.color.Shift(color);
-            }
+            var a = ExtendedAmmo.Get(__instance);
+            a.manager = inManager;
+            ExtendedAmmo.EditColors(__instance.gameObject, __instance);
         }
+
+        [HarmonyPatch(typeof(ObAmmo), "PlayHitParticle")]
+        [HarmonyTranspiler]
+        static IEnumerable<CodeInstruction> ObAmmo_PlayHitParticle(IEnumerable<CodeInstruction> instructions)
+        {
+            var code = instructions.ToList();
+            var ind = code.FindIndex(x => x.opcode == OpCodes.Stloc_0);
+            var lbl = code[ind].labels;
+            code[ind].labels = new List<Label>();
+            code.InsertRange(ind, new[]
+            {
+                new CodeInstruction(OpCodes.Ldarg_0) { labels = lbl },
+                new CodeInstruction(OpCodes.Call,AccessTools.Method(typeof(ExtendedAmmo),nameof(ExtendedAmmo.EditColors)))
+            });
+            return code;
+        }
+
+        [HarmonyPatch(typeof(ObBlastAmmo), "PlayHitParticle")]
+        [HarmonyTranspiler]
+        static IEnumerable<CodeInstruction> ObBlastAmmo_PlayHitParticle(IEnumerable<CodeInstruction> instructions) => ObAmmo_PlayHitParticle(instructions);
+
+        [HarmonyPatch(typeof(ObCatapultAmmo), "PlayHitParticle")]
+        [HarmonyTranspiler]
+        static IEnumerable<CodeInstruction> ObCatapultAmmo_PlayHitParticle(IEnumerable<CodeInstruction> instructions) => ObAmmo_PlayHitParticle(instructions);
     }
 
     [HarmonyPatch(typeof(RaisedPetData))]
@@ -1532,6 +1527,52 @@ namespace HandyTweaks
                 if (values.TryParseColor(out var c))
                     d.EmissionColor = c;
             }
+        }
+    }
+
+    public class ExtendedAmmo : ExtendedClass<ExtendedAmmo,ObAmmo>
+    {
+        public WeaponManager manager;
+
+        static MaterialPropertyBlock props = new MaterialPropertyBlock();
+        public static GameObject EditColors(GameObject obj, ObAmmo fireball)
+        {
+            if (!fireball)
+                return obj;
+            var manager = Get(fireball).manager;
+            if (!manager || !manager.IsLocal || !(manager is PetWeaponManager p) || !p.SanctuaryPet)
+                return obj;
+            var d = ExtendedPetData.Get(p.SanctuaryPet.pData);
+            if (d.FireballColor == null)
+                return obj;
+            var color = d.FireballColor.Value;
+            //Debug.Log($"Changing fireball {obj.name} to {color}");
+            foreach (var r in obj.GetComponentsInChildren<Renderer>(true))
+            {
+                r.GetPropertyBlock(props);
+                foreach (var m in r.sharedMaterials)
+                    if (m && m.shader)
+                    {
+                        var c = m.shader.GetPropertyCount();
+                        for (var i = 0; i < c; i++)
+                            if (m.shader.GetPropertyType(i) == UnityEngine.Rendering.ShaderPropertyType.Color)
+                            {
+                                var n = m.shader.GetPropertyNameId(i);
+                                props.SetColor(n, m.GetColor(n).Shift(color));
+                            }
+                    }
+                r.SetPropertyBlock(props);
+            }
+            foreach (var ps in obj.GetComponentsInChildren<ParticleSystem>(true))
+            {
+                var m = ps.main;
+                m.startColor = m.startColor.Shift(color);
+                var s = ps.colorBySpeed;
+                s.color = s.color.Shift(color);
+                var l = ps.colorOverLifetime;
+                l.color = l.color.Shift(color);
+            }
+            return obj;
         }
     }
 

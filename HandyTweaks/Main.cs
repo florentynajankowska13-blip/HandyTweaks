@@ -24,7 +24,7 @@ using JSGames.UI;
 
 namespace HandyTweaks
 {
-    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.4.2")]
+    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.4.3")]
     [BepInDependency("com.aidanamite.ConfigTweaks")]
     public class Main : BaseUnityPlugin
     {
@@ -390,6 +390,32 @@ namespace HandyTweaks
                     SanctuaryManager.pCurPetInstance.UpdateMeter(SanctuaryPetMeterType.HAPPINESS, max - cur);
             }
         }
+
+        public static void TryFixUsername()
+        {
+            var s = AvatarData.pInstance.DisplayName;
+            foreach (var p in Patch_CanInput.replace)
+                s = s.Replace(p.Key, p.Value);
+            if (AvatarData.pInstance.DisplayName != s)
+                WsWebService.SetDisplayName(new SetDisplayNameRequest
+                {
+                    DisplayName = s,
+                    ItemID = 0,
+                    StoreID = 0
+                }, (a,b,c,d,e) =>
+                {
+                    if (b == WsServiceEvent.COMPLETE)
+                    {
+                        SetAvatarResult setAvatarResult = (SetAvatarResult)d;
+                        if (setAvatarResult.Success)
+                        {
+                            AvatarData.SetDisplayName(s);
+                            UserInfo.pInstance.Username = s;
+                        }
+                    }
+                }, null);
+        }
+
         void OnPopupClose()
         {
             AvAvatar.pState = AvAvatarState.IDLE;
@@ -1366,6 +1392,15 @@ namespace HandyTweaks
     [HarmonyPatch(typeof(UIInput),"Validate",typeof(string),typeof(int),typeof(char))]
     static class Patch_CanInput
     {
+        public static Dictionary<char, char> replace = new Dictionary<char, char>
+        {
+            {',','‚' },
+            {':','꞉' },
+            {'$','＄' },
+            {'*','∗' },
+            {'/','∕' },
+            { '|','∣' }
+        };
         static bool Prefix(UIInput __instance, string text, int pos, char ch, ref char __result)
         {
             if (Main.MoreNameFreedom && (__instance.validation == UIInput.Validation.Alphanumeric || __instance.validation == UIInput.Validation.Username || __instance.validation == UIInput.Validation.Name))
@@ -1373,6 +1408,8 @@ namespace HandyTweaks
                 var cat = char.GetUnicodeCategory(ch);
                 if (cat == UnicodeCategory.Control || cat == UnicodeCategory.Format || cat == UnicodeCategory.OtherNotAssigned)
                     __result = '\0';
+                else if (replace.TryGetValue(ch, out var n))
+                    __result = n;
                 else
                     __result = ch;
                 return false;
@@ -1391,11 +1428,22 @@ namespace HandyTweaks
                 var cat = char.GetUnicodeCategory(addedChar);
                 if (cat == UnicodeCategory.Control || cat == UnicodeCategory.Format || cat == UnicodeCategory.OtherNotAssigned)
                     __result = '\0';
+                else if (Patch_CanInput.replace.TryGetValue(addedChar, out var n))
+                    __result = n;
                 else
                     __result = addedChar;
                 return false;
             }
             return true;
+        }
+    }
+
+    [HarmonyPatch(typeof(UiSelectProfile), "InitProfile")]
+    static class Patch_AvatarDataLoad
+    {
+        static void Postfix()
+        {
+                Main.TryFixUsername();
         }
     }
 

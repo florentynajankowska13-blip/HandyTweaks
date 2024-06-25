@@ -15,16 +15,12 @@ using System.Net;
 using UnityEngine;
 using UnityEngine.UI;
 using Object = UnityEngine.Object;
-using System.Security.Permissions;
-using Newtonsoft.Json.Linq;
 using BepInEx.Configuration;
-using System.Runtime.Remoting.Channels;
 using UnityEngine.EventSystems;
-using JSGames.UI;
 
 namespace HandyTweaks
 {
-    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.4.3")]
+    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.5.0")]
     [BepInDependency("com.aidanamite.ConfigTweaks")]
     public class Main : BaseUnityPlugin
     {
@@ -76,6 +72,8 @@ namespace HandyTweaks
         public static bool AlwaysShowArmourWings = false;
         [ConfigField]
         public static bool DisableCustomColourPicker = false;
+        [ConfigField]
+        public static bool RemoveItemBuyLimits = false;
         [ConfigField]
         public static bool CheckForModUpdates = true;
         [ConfigField]
@@ -141,7 +139,25 @@ namespace HandyTweaks
             }
             new Harmony("com.aidanamite.HandyTweaks").PatchAll();
             Logger.LogInfo("Loaded");
+            Config.ConfigReloaded += (x, y) =>
+            {
+                if (!RemoveItemBuyLimits && Patch_SetStoreItemData.originalMaxes.Count != 0)
+                {
+                    foreach (var s in ItemStoreDataLoader.GetAllStores())
+                        foreach (var d in s._Items)
+                            if (Patch_SetStoreItemData.originalMaxes.TryGetValue(d.ItemID, out var orig))
+                                d.InventoryMax = orig;
+                    Patch_SetStoreItemData.originalMaxes.Clear();
+                }
+                else if (RemoveItemBuyLimits)
+                {
+                    foreach (var s in ItemStoreDataLoader.GetAllStores())
+                        Patch_SetStoreItemData.Postfix(s);
+                }
+            };
         }
+
+        
 
         [MethodImpl(MethodImplOptions.Synchronized)]
         bool CanStartCheck()
@@ -370,7 +386,7 @@ namespace HandyTweaks
                     textContainer.offsetMax = new Vector2(waitingText.preferredWidth + 40, 0);
                     waitingTime -= 1;
                 }
-                var t = $"Checking for mod updates ({running.Count} remaining)";
+                var t = $"Checking for mod updates ({running?.Count ?? 0} remaining)";
                 var s = new StringBuilder();
                 for (int i = 0; i < t.Length; i++)
                 {
@@ -503,6 +519,11 @@ namespace HandyTweaks
 
         public void DoNothing() { }
 
+        public void CancelDestroyDragon()
+        {
+            destroyCard = default;
+            destroyCount = 0;
+        }
 
         static Main()
         {
@@ -553,6 +574,128 @@ namespace HandyTweaks
                         return str.ToString();
                     }
                 });
+        }
+        const int ReAskCount = 2;
+        public static void TryDestroyDragon(UiDragonsInfoCardItem card, Action OnSuccess = null, Action OnFail = null)
+        {
+            if (destroyCard.ui == card)
+                destroyCount++;
+            else
+            {
+                destroyCard = (card,OnSuccess,OnFail);
+                destroyCount = 0;
+            }
+            if (destroyCount <= ReAskCount)
+            {
+                var str = "Are you";
+                for (int i = 0; i < destroyCount; i++)
+                    str += " really";
+                str += " sure?";
+                if (destroyCount == ReAskCount)
+                    str += "\n\nThis is your last warning. This really cannot be undone";
+                else if (destroyCount == 0)
+                    str += "\n\nYou will permanently lose this dragon. This can't be undone";
+                else
+                    str += "\n\nThis can't be undone";
+                GameUtilities.DisplayGenericDB("PfKAUIGenericDB", str, "Release Dragon", instance.gameObject, nameof(ConfirmDestroyDragon), nameof(CancelDestroyDragon), null, null, true);
+                return;
+            }
+
+            KAUICursorManager.SetDefaultCursor("Loading", true);
+            card.pUI.SetState(KAUIState.DISABLED);
+            void OnEnd(string message, bool success)
+            {
+                KAUICursorManager.SetDefaultCursor("Arrow", true);
+                card.pUI.SetState(KAUIState.INTERACTIVE);
+                destroyCard = default;
+                GameUtilities.DisplayOKMessage("PfKAUIGenericDB", message, null, "");
+                (success ? OnSuccess : OnFail)?.Invoke();
+            }
+
+            IEnumerator DoRemove()
+            {
+                var originalData = card.pSelectedPetData;
+                var petid = originalData.RaisedPetID;
+                var itemid = SanctuaryData.FindSanctuaryPetTypeInfo(originalData.PetTypeID)._IsUniquePet ? originalData.FindAttrData("TicketID")?.Value : null;
+                if (itemid != null && int.TryParse(itemid, out var realId))
+                {
+                    var count = 0;
+                    var common = 0;
+                    if (ParentData.pIsReady)
+                        count += ParentData.pInstance.pInventory.GetQuantity(realId);
+                    if (CommonInventoryData.pIsReady)
+                        count += common = CommonInventoryData.pInstance.GetQuantity(realId);
+                    if (count > 0)
+                    {
+                        var request = new CommonInventoryRequest()
+                        {
+                            ItemID = realId,
+                            Quantity = -1
+                        };
+                        var state = 0;
+                        (common > 0 ? CommonInventoryData.pInstance : ParentData.pInstance.pInventory.pData).RemoveItem(realId, true, 1, (success, _) =>
+                        {
+                            if (success)
+                                state = 1;
+                            else
+                                state = 2;
+                        });
+                        while (state == 0)
+                            yield return null;
+                        if (state == 2)
+                        {
+                            OnEnd("Failed to release dragon.\nFailed to remove dragon ticket", false);
+                            yield break;
+                        }
+                    }
+                }
+                WsWebService.SetRaisedPet(new RaisedPetData()
+                {
+                    RaisedPetID = petid,
+                    PetTypeID = 2,
+                    IsSelected = false,
+                    IsReleased = false,
+                    Gender = Gender.Unknown,
+                    UpdateDate = DateTime.MinValue
+                }, Array.Empty<CommonInventoryRequest>(), (a, b, c, d, e) =>
+                {
+                    if (b == WsServiceEvent.COMPLETE)
+                    {
+                        WsWebService.SetRaisedPetInactive(petid, (f, g, h, i, j) =>
+                        {
+                            if (g == WsServiceEvent.COMPLETE)
+                            {
+                                originalData.RemoveFromActivePet();
+                                var nest = StableData.GetByPetID(petid)?.GetNestByPetID(petid);
+                                if (nest != null)
+                                {
+                                    nest.PetID = 0;
+                                    StableData.SaveData();
+                                }
+                                OnEnd("Dragon released", true);
+                            }
+                            else if (b == WsServiceEvent.ERROR)
+                                WsWebService.SetRaisedPet(originalData, Array.Empty<CommonInventoryRequest>(), (k, l, m, n, o) =>
+                                {
+                                    if (l == WsServiceEvent.COMPLETE)
+                                        OnEnd("Failed to release dragon.\nChanges reversed", false);
+                                    if (l == WsServiceEvent.ERROR)
+                                        OnEnd("Failed to release dragon.\nAlso failed to reverse changes, there may be some unexpected results", false);
+                                }, null);
+                        }, null);
+                    }
+                    else if (b == WsServiceEvent.ERROR)
+                        OnEnd("Failed to release dragon", false);
+                }, null);
+                yield break;
+            }
+            instance.StartCoroutine(DoRemove());
+        }
+        static int destroyCount = 0;
+        static (UiDragonsInfoCardItem ui,Action succ,Action fail) destroyCard;
+        public void ConfirmDestroyDragon()
+        {
+            TryDestroyDragon(destroyCard.ui,destroyCard.succ,destroyCard.fail);
         }
     }
 
@@ -2044,5 +2187,122 @@ namespace HandyTweaks
             open.OnClose = onClose;
             return open;
         } 
+    }
+
+    [HarmonyPatch(typeof(UiDragonsInfoCardItem))]
+    static class Patch_DragonInfoCard
+    {
+        [HarmonyPatch("RefreshUI")]
+        [HarmonyPostfix]
+        static void RefreshUI(UiDragonsInfoCardItem __instance) => ExtendedInfoCard.Get(__instance).Refresh();
+
+        [HarmonyPatch("OnClick",typeof(KAWidget))]
+        [HarmonyPostfix]
+        static void OnClick(UiDragonsInfoCardItem __instance, KAWidget inWidget) => ExtendedInfoCard.Get(__instance).OnClick(inWidget);
+    }
+
+    public class ExtendedInfoCard : ExtendedClass<ExtendedInfoCard,UiDragonsInfoCardItem>
+    {
+        public UiDragonsInfoCardItem instance;
+        public KAWidget ReleaseBtn;
+        protected override void OnCreate(UiDragonsInfoCardItem instance)
+        {
+            base.OnCreate(instance);
+            this.instance = instance;
+            ReleaseBtn = instance.pUI.DuplicateWidget(instance.mBtnChangeName,instance.mBtnChangeName.pAnchor.side);
+            instance.mBtnChangeName.pParentWidget?.AddChild(ReleaseBtn);
+            ReleaseBtn.transform.position = instance.mBtnChangeName.transform.position + new Vector3(-50,0,0);
+            ReleaseBtn.SetToolTipText("Release Dragon");
+            ReleaseBtn.RemoveChildItem(ReleaseBtn.FindChildItem("Gems"),true);
+            var back = ReleaseBtn.FindChildItem("Icon").transform.Find("Background").GetComponent<UISprite>();
+            back.spriteName = "IconIgnore";
+            back.pOrgSprite = "IconIgnore";
+            back = ReleaseBtn.transform.Find("Background").GetComponent<UISprite>();
+            back.pOrgColorTint = back.pOrgColorTint.Shift(Color.red);
+            back.color = back.color.Shift(Color.red);
+        }
+        public void Refresh()
+        {
+            ReleaseBtn.SetVisibility(instance.pSelectedPetData != SanctuaryManager.pCurPetData);
+        }
+        public void OnClick(KAWidget widget)
+        {
+            if (widget == ReleaseBtn)
+            {
+                var selected = instance.pSelectedPetID;
+                var instances = Resources.FindObjectsOfTypeAll<SanctuaryPet>().Where(x => x.pData?.RaisedPetID == selected).ToArray();
+                Main.TryDestroyDragon(instance, () =>
+                {
+                    foreach (var i in instances)
+                        if (i)
+                            Object.Destroy(i.gameObject);
+                    var info = instance.mMsgObject.GetComponent<UiDragonsInfoCard>();
+                    var list = Object.FindObjectOfType<UiDragonsListCard>();
+                    if (list && list.GetVisibility())
+                    {
+                        list.RefreshUI();
+                        list.SelectDragon(SanctuaryManager.pCurPetData?.RaisedPetID ?? 0);
+                        info.RefreshUI();
+                    }
+                    else
+                    {
+                        info.PopOutCard();
+                        Object.FindObjectOfType<UiStablesInfoCard>()?.RefreshUI();
+                    }
+                });
+            }
+        }
+    }
+
+    [HarmonyPatch(typeof(StoreData), "SetStoreData")]
+    static class Patch_SetStoreItemData
+    {
+        public static Dictionary<int, int> originalMaxes = new Dictionary<int, int>();
+        public static void Postfix(StoreData __instance)
+        {
+            if (Main.RemoveItemBuyLimits)
+                foreach (var i in __instance._Items)
+                    if (i.InventoryMax != -1)
+                    {
+                        originalMaxes[i.ItemID] = i.InventoryMax;
+                        i.InventoryMax = -1;
+                    }
+        }
+    }
+
+    [HarmonyPatch(typeof(KAUIStoreBuyPopUp), "SetItemData")]
+    static class Patch_SetBuyPopupItem
+    {
+        static (string text,int textid,Color color,int width)? originalText;
+        static void Postfix(KAUIStoreBuyPopUp __instance, KAStoreItemData itemData)
+        {
+            var label = __instance.mBattleSlots.GetLabel();
+            if (itemData._ItemData.HasCategory(Category.DragonTickets) && itemData._ItemData.InventoryMax < 0)
+            {
+                if (originalText == null)
+                {
+                    originalText = (label.text, label.textID, label.pOrgColorTint, label.width);
+                    label.textID = 0;
+                    label.text = "Buying many of this item is not recommended";
+                    label.ResetEnglishText();
+                    label.color = label.pOrgColorTint = originalText.Value.color.Shift(Color.red);
+                    label.width = (int)(originalText.Value.width * 1.8);
+                    __instance.mBattleSlots.transform.position += new Vector3((label.width - originalText.Value.width), 0, 0);
+                    __instance.mOccupiedBattleSlots.SetText("");
+                }
+                __instance.mBattleSlots.SetVisibility(true);
+            }
+            else if (originalText != null)
+            {
+                label.text = originalText.Value.text;
+                label.textID = originalText.Value.textid;
+                label.ResetEnglishText();
+                label.color = label.pOrgColorTint = originalText.Value.color;
+                __instance.mBattleSlots.transform.position -= new Vector3((label.width - originalText.Value.width), 0, 0);
+                label.width = originalText.Value.width;
+                originalText = null;
+            }
+
+        }
     }
 }

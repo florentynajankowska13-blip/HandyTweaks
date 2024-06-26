@@ -20,7 +20,7 @@ using UnityEngine.EventSystems;
 
 namespace HandyTweaks
 {
-    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.5.0")]
+    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.5.3")]
     [BepInDependency("com.aidanamite.ConfigTweaks")]
     public class Main : BaseUnityPlugin
     {
@@ -71,7 +71,7 @@ namespace HandyTweaks
         [ConfigField]
         public static bool AlwaysShowArmourWings = false;
         [ConfigField]
-        public static bool DisableCustomColourPicker = false;
+        public static ColorPickerMode CustomColorPickerMode = ColorPickerMode.RGBHSL;
         [ConfigField]
         public static bool RemoveItemBuyLimits = false;
         [ConfigField]
@@ -131,7 +131,7 @@ namespace HandyTweaks
                 foreach (var plugin in Resources.FindObjectsOfTypeAll<BaseUnityPlugin>())
                     CheckModVersion(plugin);
             }
-            using (var s = Assembly.GetExecutingAssembly().GetManifestResourceStream("HandyTweaks.colorpicker"))
+            using (var s = Assembly.GetExecutingAssembly().GetManifestResourceStream("HandyTweaks.handytweaks"))
             {
                 var b = AssetBundle.LoadFromStream(s);
                 ColorPicker.UIPrefab = b.LoadAsset<GameObject>("ColorPicker");
@@ -154,6 +154,7 @@ namespace HandyTweaks
                     foreach (var s in ItemStoreDataLoader.GetAllStores())
                         Patch_SetStoreItemData.Postfix(s);
                 }
+                ColorPicker.TryUpdateSliderVisibility();
             };
         }
 
@@ -720,6 +721,15 @@ namespace HandyTweaks
         MouseWhenNoTargets,
         FindTargetNearMouse,
         AlwaysMouse
+    }
+
+    [Flags]
+    public enum ColorPickerMode
+    {
+        Disabled,
+        RGB,
+        HSL,
+        RGBHSL
     }
 
     static class ExtentionMethods
@@ -1829,7 +1839,7 @@ namespace HandyTweaks
         [HarmonyPostfix]
         static void SetColorSelector(UiDragonCustomization __instance)
         {
-            if (Main.DisableCustomColourPicker)
+            if (Main.CustomColorPickerMode == ColorPickerMode.Disabled)
                 return;
             if (__instance.mIsUsedInJournal && !ExtendedDragonCustomization.FreeCustomization(__instance.mFreeCustomization, __instance) && CommonInventoryData.pInstance.GetQuantity(__instance.mUiJournalCustomization._DragonTicketItemID) <= 0)
                 return;
@@ -2045,6 +2055,7 @@ namespace HandyTweaks
                 e.fireballColor = color;
                 instance.mRebuildTexture = true;
             }
+            ColorPicker.TrySetColor(color);
             return instance;
         }
 
@@ -2066,7 +2077,7 @@ namespace HandyTweaks
     {
         static void Postfix(UiAvatarCustomization __instance)
         {
-            if (Main.DisableCustomColourPicker)
+            if (Main.CustomColorPickerMode == ColorPickerMode.Disabled)
                 return;
             var ui = ColorPicker.OpenUI((x) =>
             {
@@ -2089,10 +2100,43 @@ namespace HandyTweaks
     public class ColorPicker : MonoBehaviour, IPointerEnterHandler, IPointerExitHandler
     {
         public Image Display;
-        public (Slider slider, InputField input) Red;
-        public (Slider slider, InputField input) Green;
-        public (Slider slider, InputField input) Blue;
-        (Slider slider, InputField input) this[int channel] => channel == 0 ? Red : channel == 1 ? Green : channel == 2 ? Blue : default;
+        public class ColorSlider
+        {
+            public ColorSlider(Slider slider, InputField input, Image back, Image tint)
+            {
+                this.slider = slider;
+                this.input = input;
+                this.back = back;
+                this.tint = tint;
+            }
+            public ColorSlider(Transform transform, string slider = "Slider", string input = "Input", string back = "Slider/Background/GradientBackground", string tint = "Slider/Background/GradientBackground/Gradient")
+                : this(transform.Find(slider).GetComponent<Slider>(), transform.Find(input).GetComponent<InputField>(), transform.Find(back).GetComponent<Image>(), transform.Find(tint).GetComponent<Image>())
+            { }
+            public Slider slider;
+            public InputField input;
+            public Image back;
+            public Image tint;
+        }
+        public ColorSlider Red;
+        public ColorSlider Green;
+        public ColorSlider Blue;
+        public ColorSlider Hue;
+        public ColorSlider Saturation;
+        public ColorSlider Luminosity;
+        (float H, float S, float L) HSL;
+        ColorSlider this[int channel] => channel == 0 ? Red : channel == 1 ? Green : channel == 2 ? Blue : default;
+        ColorSlider this[string channel] {
+            get
+            {
+                if (channel == "R") return Red;
+                if (channel == "G") return Green;
+                if (channel == "B") return Blue;
+                if (channel == "H") return Hue;
+                if (channel == "S") return Saturation;
+                if (channel == "L") return Luminosity;
+                return null;
+            }
+        }
         public Button Close;
         public event Action<Color> OnChange;
         public event Action OnClose;
@@ -2105,38 +2149,56 @@ namespace HandyTweaks
             get => _c;
             set
             {
-                updating = true;
-                _c = value;
-                _c.a = 1;
-                for (int i = 0; i < 3; i++)
-                {
-                    this[i].slider.value = _c[i];
-                    this[i].input.text = Math.Round(_c[i] * 255).ToString();
-                }
-                Display.color = _c;
-                updating = false;
-                OnChange?.Invoke(_c);
+                value.a = 1;
+                if (value == _c)
+                    return;
+                UpdateSliders(value);
             }
         }
-        T GetComponent<T>(string path) where T : Component => transform.Find(path).GetComponent<T>();
+        T GetComponent<T>(string path) where T : Component => Find(path).GetComponent<T>();
+        Transform Find(string path) => transform.Find(path);
         void Awake()
         {
             handle = gameObject.AddComponent<KAUI>();
 
-            Display = GetComponent<Image>("ColorView");
-            Red = (GetComponent<Slider>("RInputs/Slider"), GetComponent<InputField>("RInputs/Input"));
-            Green = (GetComponent<Slider>("GInputs/Slider"), GetComponent<InputField>("GInputs/Input"));
-            Blue = (GetComponent<Slider>("BInputs/Slider"), GetComponent<InputField>("BInputs/Input"));
-            Close = GetComponent<Button>("CloseButton");
+            Display = GetComponent<Image>("LeftContainer/ColorView/Color");
+            Red = new ColorSlider(Find("R"));
+            Green = new ColorSlider(Find("G"));
+            Blue = new ColorSlider(Find("B"));
+            Hue = new ColorSlider(Find("H"),back: "Slider/Background/GradientBackground/Gradient",tint: "Slider/Background/GradientBackground/Tint");
+            Saturation = new ColorSlider(Find("S"));
+            Luminosity = new ColorSlider(Find("L"));
+            UpdateSliderVisibility();
+
+            Close = GetComponent<Button>("LeftContainer/CloseButton");
 
             Close.onClick.AddListener(CloseUI);
-            Red.slider.onValueChanged.AddListener((x) => UpdateColor(0, x, false));
-            Green.slider.onValueChanged.AddListener((x) => UpdateColor(1, x, false));
-            Blue.slider.onValueChanged.AddListener((x) => UpdateColor(2, x, false));
-            Red.input.onValueChanged.AddListener((x) => UpdateColor(0, int.TryParse(x, out var v) ? v / 255f : 0, text: false));
-            Green.input.onValueChanged.AddListener((x) => UpdateColor(1, int.TryParse(x, out var v) ? v / 255f : 0, text: false));
-            Blue.input.onValueChanged.AddListener((x) => UpdateColor(2, int.TryParse(x, out var v) ? v / 255f : 0, text: false));
+            foreach (var t in new[] { "R","G","B","H","S","L" })
+            {
+                var tag = t;
+                this[tag].slider.onValueChanged.AddListener((x) => UpdateValue(tag, x));
+                if (tag == "H")
+                    this[tag].input.onValueChanged.AddListener((x) => UpdateValue(tag, int.TryParse(x, out var v) ? v / 360f : 0));
+                else
+                    this[tag].input.onValueChanged.AddListener((x) => UpdateValue(tag, int.TryParse(x, out var v) ? v / 255f : 0));
+            }
         }
+
+        public static void TryUpdateSliderVisibility()
+        {
+            if (open)
+                open.UpdateSliderVisibility();
+        }
+        public void UpdateSliderVisibility()
+        {
+            var rgb = (Main.CustomColorPickerMode & ColorPickerMode.RGB) != 0;
+            var hsl = (Main.CustomColorPickerMode & ColorPickerMode.HSL) != 0;
+            foreach (var t in new[] { "R", "G", "B" })
+                Find(t).gameObject.SetActive(rgb);
+            foreach (var t in new[] { "H", "S", "L" })
+                Find(t).gameObject.SetActive(hsl);
+        }
+
         void IPointerEnterHandler.OnPointerEnter(PointerEventData eventData)
         {
             KAUI.SetExclusive(handle);
@@ -2154,20 +2216,92 @@ namespace HandyTweaks
             KAUI.RemoveExclusive(GetComponent<KAUI>());
             OnClose?.Invoke();
         }
+
+        void UpdateSliders(Color nColor, string called = null, float value = 0)
+        {
+            _c = nColor;
+            if (called == "H" || called == "L" || called == "S")
+            {
+                if (called == "H")
+                    HSL.H = value;
+                else if (called == "S")
+                    HSL.S = value;
+                else
+                    HSL.L = value;
+                UpdateSlider(called, value);
+                UpdateSlider("R", _c.r);
+                UpdateSlider("G", _c.g);
+                UpdateSlider("B", _c.b);
+                UpdateGradients();
+            }
+            else
+            {
+                UpdateSlider("R", _c.r);
+                UpdateSlider("G", _c.g);
+                UpdateSlider("B", _c.b);
+                _c.ToHSL(out var h, out var s, out var l);
+                HSL = (h, s, l);
+                UpdateSlider("H", h);
+                UpdateSlider("S", s);
+                UpdateSlider("L", l);
+                UpdateGradients();
+            }
+            Display.color = _c;
+            OnChange?.Invoke(_c);
+        }
+
+        void UpdateSlider(string tag, float value)
+        {
+            if (this[tag] != null)
+            {
+                updating = true;
+                this[tag].slider.value = value;
+                this[tag].input.text = Math.Round(value * (tag == "H" ? 360 : 255)).ToString();
+                updating = false;
+            }
+        }
+
+        void UpdateGradients()
+        {
+            Red.back.color = new Color(1, _c.g, _c.b);
+            Red.tint.color = new Color(0, _c.g, _c.b);
+            Green.back.color = new Color(_c.r, 1, _c.b);
+            Green.tint.color = new Color(_c.r, 0, _c.b);
+            Blue.back.color = new Color(_c.r, _c.g, 1);
+            Blue.tint.color = new Color(_c.r, _c.g, 0);
+            var nhsl = HSL;
+            ColorConvert.Normalized(ref nhsl.H, ref nhsl.S, ref nhsl.L);
+            var h = ColorConvert.FromHSL(0, 0, nhsl.L);
+            h.a = 1 - nhsl.S;
+            Hue.tint.color = h;
+            Saturation.back.color = ColorConvert.FromHSL(HSL.H, 1, HSL.L);
+            Saturation.tint.color = ColorConvert.FromHSL(HSL.H, 0, HSL.L);
+            Luminosity.back.color = ColorConvert.FromHSL(HSL.H, HSL.S, 1);
+            Luminosity.tint.color = ColorConvert.FromHSL(HSL.H, HSL.S, 0);
+        }
+
         bool updating = false;
-        void UpdateColor(byte channel, float newValue, bool slider = true, bool text = true)
+        void UpdateValue(string tag, float value)
         {
             if (updating)
                 return;
-            updating = true;
-            if (slider)
-                this[channel].slider.value = newValue;
-            if (text)
-                this[channel].input.text = Math.Round(newValue * 255).ToString();
-            _c[channel] = newValue;
-            Display.color = _c;
-            updating = false;
-            OnChange?.Invoke(_c);
+            Color nc = _c;
+            if (tag == "R")
+                nc.r = value;
+            else if (tag == "G")
+                nc.g = value;
+            else if (tag == "B")
+                nc.b = value;
+            else if (tag == "H")
+                nc = ColorConvert.FromHSL(value, HSL.S, HSL.L);
+            else if (tag == "S")
+                nc = ColorConvert.FromHSL(HSL.H, value, HSL.L);
+            else if (tag == "L")
+                nc = ColorConvert.FromHSL(HSL.H, HSL.S, value);
+            else
+                throw new ArgumentOutOfRangeException();
+            
+            UpdateSliders(nc, tag, value);
         }
         void Update()
         {
@@ -2179,6 +2313,11 @@ namespace HandyTweaks
 
         public static GameObject UIPrefab;
         static ColorPicker open;
+        public static void TrySetColor(Color color)
+        {
+            if (open)
+                open.current = color;
+        }
         public static ColorPicker OpenUI(Action<Color> onChange = null, Action onClose = null)
         {
             if (!open)
@@ -2186,7 +2325,120 @@ namespace HandyTweaks
             open.OnChange = onChange;
             open.OnClose = onClose;
             return open;
-        } 
+        }
+    }
+
+    public static class ColorConvert
+    {
+        public static void ToHSL(this Color c, out float hue, out float saturation, out float luminosity) => ToHSL(c.r, c.g, c.b, out hue, out saturation, out luminosity);
+        public static void ToHSL(float R, float G, float B, out float hue, out float saturation, out float luminosity)
+        {
+            var max = Math.Max(Math.Max(R, G), B);
+            var min = Math.Min(Math.Min(R, G), B);
+            luminosity = max;
+            if (min == max)
+            {
+                hue = 0;
+                saturation = 0;
+                return;
+            }
+            saturation = (max - min) / max;
+            if (R == max)
+            {
+                if (G >= B)
+                    hue = (G - min) * H60 / (max - min);
+                else
+                    hue = H360 - (B - min) * H60 / (max - min);
+            }
+            else if (G == max)
+            {
+                if (B >= R)
+                    hue = H120 + (B - min) * H60 / (max - min);
+                else
+                    hue = H120 - (R - min) * H60 / (max - min);
+            }
+            else
+            {
+                if (R >= G)
+                    hue = H240 + (R - min) * H60 / (max - min);
+                else
+                    hue = H240 - (G - min) * H60 / (max - min);
+            }
+        }
+        public static Color FromHSL(float hue, float saturation, float luminosity)
+        {
+            FromHSL(hue, saturation, luminosity, out var R, out var G, out var B);
+            return new Color(R, G, B);
+        }
+        const float H60 = 1f / 6;
+        const float H120 = 2f / 6;
+        const float H180 = 3f / 6;
+        const float H240 = 4f / 6;
+        const float H300 = 5f / 6;
+        const float H360 = 1;
+        public static void FromHSL(float hue, float saturation, float luminosity, out float R, out float G, out float B)
+        {
+            hue %= 1;
+            if (hue < 0)
+                hue += 1;
+            var max = luminosity;
+            if (saturation == 0)
+            {
+                R = G = B = max;
+                return;
+            }
+            var min = max - (saturation * max);
+            if (hue <= H60)
+            {
+                B = min;
+                R = max;
+                G = min + hue * (max - min) / H60;
+            }
+            else if (hue <= H120)
+            {
+                B = min;
+                G = max;
+                R = min + (H120 - hue) * (max - min) / H60;
+            }
+            else if (hue <= H180)
+            {
+                R = min;
+                G = max;
+                B = min + (hue - H120) * (max - min) / H60;
+            }
+            else if (hue <= H240)
+            {
+                R = min;
+                B = max;
+                G = min + (H240 - hue) * (max - min) / H60;
+            }
+            else if (hue <= H300)
+            {
+                G = min;
+                B = max;
+                R = min + (hue - H240) * (max - min) / H60;
+            }
+            else
+            {
+                G = min;
+                R = max;
+                B = min + (H360 - hue) * (max - min) / H60;
+            }
+        }
+
+        public static Color Normalized(this Color c)
+        {
+            c.ToHSL(out var h, out var s, out var l);
+            Normalized(ref h, ref s, ref l);
+            return FromHSL(h, s, l);
+        }
+
+        public static Color Clamped(this Color c) => new Color(Math.Min(1, Math.Max(0, c.r)), Math.Min(1, Math.Max(0, c.g)), Math.Min(1, Math.Max(0, c.b)), Math.Min(1, Math.Max(0, c.a)));
+        public static void Normalized(ref float hue, ref float saturation, ref float luminosity)
+        {
+            saturation = Math.Min(1, Math.Max(0, saturation));
+            luminosity = Math.Min(1, Math.Max(0, luminosity));
+        }
     }
 
     [HarmonyPatch(typeof(UiDragonsInfoCardItem))]
@@ -2209,25 +2461,29 @@ namespace HandyTweaks
         {
             base.OnCreate(instance);
             this.instance = instance;
-            ReleaseBtn = instance.pUI.DuplicateWidget(instance.mBtnChangeName,instance.mBtnChangeName.pAnchor.side);
-            instance.mBtnChangeName.pParentWidget?.AddChild(ReleaseBtn);
-            ReleaseBtn.transform.position = instance.mBtnChangeName.transform.position + new Vector3(-50,0,0);
-            ReleaseBtn.SetToolTipText("Release Dragon");
-            ReleaseBtn.RemoveChildItem(ReleaseBtn.FindChildItem("Gems"),true);
-            var back = ReleaseBtn.FindChildItem("Icon").transform.Find("Background").GetComponent<UISprite>();
-            back.spriteName = "IconIgnore";
-            back.pOrgSprite = "IconIgnore";
-            back = ReleaseBtn.transform.Find("Background").GetComponent<UISprite>();
-            back.pOrgColorTint = back.pOrgColorTint.Shift(Color.red);
-            back.color = back.color.Shift(Color.red);
+            if (instance.mBtnChangeName)
+            {
+                ReleaseBtn = instance.pUI.DuplicateWidget(instance.mBtnChangeName, instance.mBtnChangeName.pAnchor.side);
+                instance.mBtnChangeName.pParentWidget?.AddChild(ReleaseBtn);
+                ReleaseBtn.transform.position = instance.mBtnChangeName.transform.position + new Vector3(-50, 0, 0);
+                ReleaseBtn.SetToolTipText("Release Dragon");
+                ReleaseBtn.RemoveChildItem(ReleaseBtn.FindChildItem("Gems"), true);
+                var back = ReleaseBtn.FindChildItem("Icon").transform.Find("Background").GetComponent<UISprite>();
+                back.spriteName = "IconIgnore";
+                back.pOrgSprite = "IconIgnore";
+                back = ReleaseBtn.transform.Find("Background").GetComponent<UISprite>();
+                back.pOrgColorTint = back.pOrgColorTint.Shift(Color.red);
+                back.color = back.color.Shift(Color.red);
+            }
         }
         public void Refresh()
         {
-            ReleaseBtn.SetVisibility(instance.pSelectedPetData != SanctuaryManager.pCurPetData);
+            if (ReleaseBtn)
+                ReleaseBtn.SetVisibility(instance.pSelectedPetData != SanctuaryManager.pCurPetData);
         }
         public void OnClick(KAWidget widget)
         {
-            if (widget == ReleaseBtn)
+            if (ReleaseBtn && widget == ReleaseBtn)
             {
                 var selected = instance.pSelectedPetID;
                 var instances = Resources.FindObjectsOfTypeAll<SanctuaryPet>().Where(x => x.pData?.RaisedPetID == selected).ToArray();

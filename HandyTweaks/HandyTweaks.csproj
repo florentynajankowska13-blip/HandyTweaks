@@ -155,7 +155,7 @@
     </Reference>
   </ItemGroup>
   <ItemGroup>
-    <EmbeddedResource Include="colorpicker" />
+    <EmbeddedResource Include="handytweaks" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <PropertyGroup>

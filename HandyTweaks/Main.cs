@@ -20,7 +20,7 @@ using UnityEngine.EventSystems;
 
 namespace HandyTweaks
 {
-    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.5.3")]
+    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.5.4")]
     [BepInDependency("com.aidanamite.ConfigTweaks")]
     public class Main : BaseUnityPlugin
     {
@@ -1701,12 +1701,12 @@ namespace HandyTweaks
         {
             var d = ExtendedPetData.Get(__instance);
             if (d.EmissionColor == null)
-                __instance.RemoveAttrData(ExtendedPetData.EMISSIONCOLOR_KEY);
+                __instance.SetAttrData(ExtendedPetData.EMISSIONCOLOR_KEY, "false", DataType.BOOL);
             else
                 __instance.SetAttrData(ExtendedPetData.EMISSIONCOLOR_KEY, d.EmissionColor.Value.JoinValues(), DataType.STRING);
 
             if (d.FireballColor == null)
-                __instance.RemoveAttrData(ExtendedPetData.FIREBALLCOLOR_KEY);
+                __instance.SetAttrData(ExtendedPetData.FIREBALLCOLOR_KEY, "false", DataType.BOOL);
             else
                 __instance.SetAttrData(ExtendedPetData.FIREBALLCOLOR_KEY, d.FireballColor.Value.JoinValues(), DataType.STRING);
         }
@@ -2178,9 +2178,9 @@ namespace HandyTweaks
                 var tag = t;
                 this[tag].slider.onValueChanged.AddListener((x) => UpdateValue(tag, x));
                 if (tag == "H")
-                    this[tag].input.onValueChanged.AddListener((x) => UpdateValue(tag, int.TryParse(x, out var v) ? v / 360f : 0));
+                    this[tag].input.onValueChanged.AddListener((x) => UpdateValue(tag, int.TryParse(x, out var v) ? v / 360f : 0, true));
                 else
-                    this[tag].input.onValueChanged.AddListener((x) => UpdateValue(tag, int.TryParse(x, out var v) ? v / 255f : 0));
+                    this[tag].input.onValueChanged.AddListener((x) => UpdateValue(tag, int.TryParse(x, out var v) ? v / 255f : 0, true));
             }
         }
 
@@ -2217,7 +2217,7 @@ namespace HandyTweaks
             OnClose?.Invoke();
         }
 
-        void UpdateSliders(Color nColor, string called = null, float value = 0)
+        void UpdateSliders(Color nColor, string called = null, float value = 0, bool fromInput = false)
         {
             _c = nColor;
             if (called == "H" || called == "L" || called == "S")
@@ -2228,7 +2228,7 @@ namespace HandyTweaks
                     HSL.S = value;
                 else
                     HSL.L = value;
-                UpdateSlider(called, value);
+                UpdateSlider(called, value, fromInput);
                 UpdateSlider("R", _c.r);
                 UpdateSlider("G", _c.g);
                 UpdateSlider("B", _c.b);
@@ -2236,9 +2236,9 @@ namespace HandyTweaks
             }
             else
             {
-                UpdateSlider("R", _c.r);
-                UpdateSlider("G", _c.g);
-                UpdateSlider("B", _c.b);
+                UpdateSlider("R", _c.r, fromInput && called == "R");
+                UpdateSlider("G", _c.g, fromInput && called == "G");
+                UpdateSlider("B", _c.b, fromInput && called == "B");
                 _c.ToHSL(out var h, out var s, out var l);
                 HSL = (h, s, l);
                 UpdateSlider("H", h);
@@ -2250,13 +2250,14 @@ namespace HandyTweaks
             OnChange?.Invoke(_c);
         }
 
-        void UpdateSlider(string tag, float value)
+        void UpdateSlider(string tag, float value, bool fromInput = false)
         {
             if (this[tag] != null)
             {
                 updating = true;
                 this[tag].slider.value = value;
-                this[tag].input.text = Math.Round(value * (tag == "H" ? 360 : 255)).ToString();
+                if (!fromInput)
+                    this[tag].input.text = ((long)Math.Round(value * (tag == "H" ? 360 : 255))).ToString();
                 updating = false;
             }
         }
@@ -2281,7 +2282,7 @@ namespace HandyTweaks
         }
 
         bool updating = false;
-        void UpdateValue(string tag, float value)
+        void UpdateValue(string tag, float value, bool fromInput = false)
         {
             if (updating)
                 return;
@@ -2301,7 +2302,7 @@ namespace HandyTweaks
             else
                 throw new ArgumentOutOfRangeException();
             
-            UpdateSliders(nc, tag, value);
+            UpdateSliders(nc, tag, value, fromInput);
         }
         void Update()
         {

@@ -17,10 +17,12 @@ using UnityEngine.UI;
 using Object = UnityEngine.Object;
 using BepInEx.Configuration;
 using UnityEngine.EventSystems;
+using Unity.Collections;
+using BepInEx.Logging;
 
 namespace HandyTweaks
 {
-    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.5.4")]
+    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.5.5")]
     [BepInDependency("com.aidanamite.ConfigTweaks")]
     public class Main : BaseUnityPlugin
     {
@@ -82,6 +84,7 @@ namespace HandyTweaks
         public static int MaxConcurrentUpdateChecks = 4;
 
         public static Main instance;
+        public static ManualLogSource logger;
         static List<(BaseUnityPlugin, string)> updatesFound = new List<(BaseUnityPlugin, string)>();
         static ConcurrentDictionary<WebRequest,bool> running = new ConcurrentDictionary<WebRequest, bool>();
         static int currentActive;
@@ -93,6 +96,7 @@ namespace HandyTweaks
         public void Awake()
         {
             instance = this;
+            logger = Logger;
             if (CheckForModUpdates)
             {
                 waitingUI = new GameObject("Waiting UI", typeof(RectTransform));
@@ -926,6 +930,8 @@ namespace HandyTweaks
             return false;
         }
         public static string JoinValues(this Color c, string delimeter = "$") => (int)Math.Round(c.r * 255.0) + delimeter + (int)Math.Round(c.g * 255.0) + delimeter + (int)Math.Round(c.b * 255.0);
+        public static T GetOrAddComponent<T>(this GameObject g) where T : Component => g.GetComponent<T>() ?? g.AddComponent<T>();
+        public static Y GetValueOrDefault<X, Y>(this IReadOnlyDictionary<X, Y> d, X key) => d.TryGetValue(key, out var value) ? value : default;
     }
     public enum StatCompareResult
     {
@@ -940,13 +946,18 @@ namespace HandyTweaks
         public static X Get(Y instance)
         {
             if (table.TryGetValue(instance, out var v))
+            {
+                v.OnGet(instance);
                 return v;
+            }
             v = new X();
             table.Add(instance, v);
             v.OnCreate(instance);
+            v.OnGet(instance);
             return v;
         }
         protected virtual void OnCreate(Y instance) { }
+        protected virtual void OnGet(Y instance) { }
     }
 
     [HarmonyPatch(typeof(UiMyRoomBuilder), "Update")]
@@ -1673,7 +1684,11 @@ namespace HandyTweaks
         [HarmonyPatch("ParseResStringEx")]
         static void Postfix(string s, RaisedPetData __instance)
         {
+            ExtendedPetData.Get(__instance).isIntact = false;
             foreach (var i in s.Split('*'))
+                if (i == ExtendedPetData.ISINTACT_KEY)
+                    ExtendedPetData.Get(__instance).isIntact = true;
+            else
             {
                 var values = i.Split('$');
                 if (values.Length >= 2 && values[0] == ExtendedPetData.FIREBALLCOLOR_KEY)
@@ -1695,6 +1710,8 @@ namespace HandyTweaks
                 __result += ExtendedPetData.FIREBALLCOLOR_KEY + "$" + d.FireballColor.Value.JoinValues() + "*";
             if (d.EmissionColor != null)
                 __result += ExtendedPetData.EMISSIONCOLOR_KEY + "$" + d.EmissionColor.Value.JoinValues() + "*";
+            if (d.isIntact)
+                __result += ExtendedPetData.ISINTACT_KEY + "*";
         }
         [HarmonyPatch("SaveDataReal")]
         static void Prefix(RaisedPetData __instance)
@@ -1709,6 +1726,11 @@ namespace HandyTweaks
                 __instance.SetAttrData(ExtendedPetData.FIREBALLCOLOR_KEY, "false", DataType.BOOL);
             else
                 __instance.SetAttrData(ExtendedPetData.FIREBALLCOLOR_KEY, d.FireballColor.Value.JoinValues(), DataType.STRING);
+
+            if (d.isIntact)
+                __instance.SetAttrData(ExtendedPetData.ISINTACT_KEY, "true", DataType.BOOL);
+            else
+                __instance.SetAttrData(ExtendedPetData.ISINTACT_KEY, "false", DataType.BOOL);
         }
         [HarmonyPatch("ResolveLoadedData")]
         static void Postfix(RaisedPetData __instance)
@@ -1728,6 +1750,8 @@ namespace HandyTweaks
                 if (values.TryParseColor(out var c))
                     d.EmissionColor = c;
             }
+            a = __instance.FindAttrData(ExtendedPetData.ISINTACT_KEY);
+            d.isIntact = a?.Value == "true" && a.Type == DataType.BOOL;
         }
     }
 
@@ -1783,6 +1807,8 @@ namespace HandyTweaks
         public Color? FireballColor;
         public const string EMISSIONCOLOR_KEY = "HTEC"; // Handy Tweaks Emission Colour
         public Color? EmissionColor;
+        public const string ISINTACT_KEY = "HTIFI"; // Handy Tweaks Is Fury Intact
+        public bool isIntact;
     }
 
     [HarmonyPatch(typeof(UiSelectName),"OnClick")]
@@ -1897,6 +1923,12 @@ namespace HandyTweaks
                 __instance.mSelectedColorBtn = inItem;
                 __instance.SetColorSelector();
             }
+            if (e.ToggleBtnRepaired && inItem == e.ToggleBtnRepaired)
+            {
+                __instance.mMenu.mModified = true;
+                ExtendedPetData.Get(__instance.pPetData).isIntact = e.ToggleBtnRepaired.IsChecked();
+                MeshConversion.EnforceModel(__instance.pPetData, __instance.mPet.mRendererMap.Values);
+            }
         }
 
         [HarmonyPatch("RefreshUI")]
@@ -1983,6 +2015,7 @@ namespace HandyTweaks
         UiDragonCustomization ui;
         public KAWidget emissionColorBtn;
         public KAWidget fireballColorBtn;
+        public KAToggleButton ToggleBtnRepaired;
         public Color? emissionColor;
         public Color? fireballColor;
         protected override void OnCreate(UiDragonCustomization instance)
@@ -2022,6 +2055,24 @@ namespace HandyTweaks
             emissionColorBtn.pBackground.color = emissionColor ?? NullColorFallback;
             fireballColorBtn.SetText("Fireball");
             fireballColorBtn.pBackground.color = fireballColor ?? NullColorFallback;
+
+            if (!instance.mIsCreationUI && instance.mUiJournalCustomization && MeshConversion.ShouldAffect(instance.mPetData.PetTypeID))
+            {
+                var b = ToggleBtnRepaired = (KAToggleButton)instance.DuplicateWidget(instance.mToggleBtnFemale, instance.mToggleBtnFemale.pAnchor.side);
+                b.name = "IntactNightfuries.ToggleBtnRepaired";
+                instance.mToggleBtnFemale.pParentWidget?.AddChild(b);
+                var icon = b.transform.Find("Icon").GetComponent<UISlicedSprite>();
+                icon.spriteName = icon.pOrgSprite = "IcoDWDragonsJournalDecals";
+                b._Grouped = false;
+                b.mToggleButtons = new KAToggleButton[0];
+                b.mCachedTooltipInfo._Text = new LocaleString("Toothless Tail");
+                b._CheckedTooltipInfo._Text = new LocaleString("Natural Tail");
+                foreach (var a in b._CheckedInfo._ColorInfo._ApplyTo)
+                    a._Color = new Color(0.1f, 0.9f, 0.1f);
+                var p = instance.mUiJournalCustomization.mAvatarBtn.GetPosition();
+                b.SetPosition(p.x - (b.pBackground.width + instance.mUiJournalCustomization.mAvatarBtn.pBackground.width) * 0.65f, p.y);
+                b.SetChecked(b._StartChecked = ExtendedPetData.Get(instance.mPetData).isIntact);
+            }
         } 
 
         public static Color GetSelectedColor(Color fallback, UiDragonCustomization instance)
@@ -2561,5 +2612,246 @@ namespace HandyTweaks
             }
 
         }
+    }
+
+    [HarmonyPatch]
+    static class Patch_ApplyPetCustomization
+    {
+        static IEnumerable<MethodBase> TargetMethods()
+        {
+            yield return AccessTools.Method(typeof(ApplyPetCustomization), "SetSkinData");
+            yield return AccessTools.Method(typeof(ApplyPetCustomization), "OnMeshLoaded");
+            yield break;
+        }
+        static void Postfix(ApplyPetCustomization __instance) => MeshConversion.EnforceModel(__instance.mRaisedPetData, __instance.mRendererMap.Values);
+    }
+
+    [HarmonyPatch]
+    static class Patch_SanctuaryPet
+    {
+        static IEnumerable<MethodBase> TargetMethods()
+        {
+            yield return AccessTools.Method(typeof(SanctuaryPet), "SetSkinData");
+            yield return AccessTools.Method(typeof(SanctuaryPet), "ResetSkinData");
+            yield return AccessTools.Method(typeof(SanctuaryPet), "UpdateData");
+            yield return AccessTools.Method(typeof(SanctuaryPet), "Init");
+            yield break;
+        }
+        static void Postfix(SanctuaryPet __instance) => MeshConversion.EnforceModel(__instance.pData, __instance.mRendererMap.Values);
+    }
+
+    public class MeshConversion : ExtendedClass<MeshConversion, Mesh>
+    {
+        public Mesh Other;
+        public bool IsGenerated = false;
+        static bool Disable = false;
+        static Dictionary<int, int> mirrorBones = new Dictionary<int, int> { { 2, 5 }, { 5, 2 }, { 3, 6 }, { 6, 3 }, { 4, 7 }, { 7, 4 }, { 15, 17 }, { 17, 15 }, { 16, 18 }, { 18, 16 }, { 19, 21 }, { 21, 19 }, { 20, 22 }, { 22, 20 }, { 29, 30 }, { 30, 29 }, { 34, 36 }, { 36, 34 }, { 35, 37 }, { 37, 35 }, { 38, 46 }, { 46, 38 }, { 39, 47 }, { 47, 39 }, { 40, 48 }, { 48, 40 }, { 41, 49 }, { 49, 41 }, { 42, 50 }, { 50, 42 }, { 43, 51 }, { 51, 43 }, { 44, 52 }, { 52, 44 }, { 45, 53 }, { 53, 45 }, { 54, 56 }, { 56, 54 }, { 55, 57 }, { 57, 55 }, { 59, 62 }, { 62, 59 }, { 60, 63 }, { 63, 60 }, { 61, 64 }, { 64, 61 }, { 65, 90 }, { 90, 65 }, { 66, 91 }, { 91, 66 }, { 67, 92 }, { 92, 67 }, { 68, 93 }, { 93, 68 }, { 69, 94 }, { 94, 69 }, { 70, 95 }, { 95, 70 }, { 71, 96 }, { 96, 71 }, { 72, 97 }, { 97, 72 }, { 73, 98 }, { 98, 73 }, { 74, 99 }, { 99, 74 }, { 75, 100 }, { 100, 75 }, { 76, 101 }, { 101, 76 }, { 77, 102 }, { 102, 77 }, { 78, 103 }, { 103, 78 }, { 79, 104 }, { 104, 79 }, { 80, 105 }, { 105, 80 }, { 81, 106 }, { 106, 81 }, { 82, 107 }, { 107, 82 }, { 83, 108 }, { 108, 83 }, { 84, 109 }, { 109, 84 }, { 85, 110 }, { 110, 85 }, { 86, 111 }, { 111, 86 }, { 87, 112 }, { 112, 87 }, { 88, 113 }, { 113, 88 }, { 89, 114 }, { 114, 89 } };
+
+        protected override void OnGet(Mesh instance)
+        {
+            base.OnGet(instance);
+            if (Disable || Other)
+                return;
+            try
+            {
+                if (!instance.isReadable)
+                {
+                    Main.logger.LogError("Mesh must have read/write enabled >> "+ instance.name);
+                    return;
+                }
+
+                var keep = new Dictionary<int, bool>();
+
+                var tDup = new List<int>();
+                var tKeep = new List<int>();
+                var verts = instance.vertices;
+                var tris = instance.triangles;
+
+                Side GetSide(int vInd) => verts[vInd].x > 0.001 ? Side.Good : verts[vInd].x < -0.001 ? Side.Bad : Side.Middle;
+                for (int i = 0; i < tris.Length; i += 3)
+                {
+                    var t1 = tris[i];
+                    var t2 = tris[i + 1];
+                    var t3 = tris[i + 2];
+                    var s1 = GetSide(t1);
+                    var s2 = GetSide(t2);
+                    var s3 = GetSide(t3);
+                    if (s1 == Side.Good || s2 == Side.Good || s3 == Side.Good || (s1 == Side.Middle && s2 == Side.Middle && s3 == Side.Middle))
+                    {
+                        var noneBad = s1 != Side.Bad && s2 != Side.Bad && s3 != Side.Bad;
+                        keep[t1] = keep.GetValueOrDefault(t1) || noneBad;
+                        keep[t2] = keep.GetValueOrDefault(t2) || noneBad;
+                        keep[t3] = keep.GetValueOrDefault(t3) || noneBad;
+                        if (noneBad)
+                            tDup.Add(i);
+                        else
+                            tKeep.Add(i);
+                    }
+                }
+                var uv = instance.uv;
+                var norms = instance.normals;
+                var tangs = instance.tangents;
+                var bones = GetBoneWeights(instance);
+                var nVerts = new List<Vector3>(verts.Length * 2);
+                var nUV = new List<Vector2>(uv.Length * 2);
+                var nNorms = new List<Vector3>(norms.Length * 2);
+                var nTangs = new List<Vector4>(tangs.Length * 2);
+                var nBones = new List<List<BoneWeight1>>(bones.Count * 2);
+                var indRemap = new Dictionary<int, int>();
+                for (int i = 0; i < verts.Length; i++)
+                    if (keep.TryGetValue(i, out var dup))
+                    {
+                        indRemap[i] = indRemap.Count;
+                        nVerts.Add(verts[i]);
+                        nUV.Add(uv[i]);
+                        nNorms.Add(norms[i]);
+                        nTangs.Add(tangs[i]);
+                        nBones.Add(bones[i]);
+                        if (dup)
+                        {
+                            indRemap[i + verts.Length] = indRemap.Count;
+                            nVerts.Add(Mirror(verts[i]));
+                            nUV.Add(uv[i]);
+                            nNorms.Add(Mirror(norms[i]));
+                            nTangs.Add(Mirror(tangs[i]));
+                            nBones.Add(bones[i].Select(x => new BoneWeight1() { boneIndex = mirrorBones.TryGetValue(x.boneIndex, out var y) ? y : x.boneIndex, weight = x.weight }).ToList());
+                        }
+                    }
+                var subs = GetSubmeshes(instance);
+                var nTris = new List<int>();
+                var nSubs = new List<(int start, int count)>();
+                foreach (var s in subs)
+                {
+                    var count = 0;
+                    foreach (var i in tKeep)
+                        if (i >= s.start && i < s.start + s.count)
+                        {
+                            nTris.Add(indRemap[tris[i]]);
+                            nTris.Add(indRemap[tris[i + 1]]);
+                            nTris.Add(indRemap[tris[i + 2]]);
+                            count += 3;
+                        }
+                    foreach (var i in tDup)
+                        if (i >= s.start && i < s.start + s.count)
+                        {
+                            nTris.Add(indRemap[tris[i]]);
+                            nTris.Add(indRemap[tris[i + 1]]);
+                            nTris.Add(indRemap[tris[i + 2]]);
+                            nTris.Add(indRemap.TryGetValue(tris[i] + verts.Length, out var ni) ? ni : indRemap[tris[i]]);
+                            nTris.Add(indRemap.TryGetValue(tris[i + 2] + verts.Length, out var ni2) ? ni2 : indRemap[tris[i + 2]]);
+                            nTris.Add(indRemap.TryGetValue(tris[i + 1] + verts.Length, out var ni1) ? ni1 : indRemap[tris[i + 1]]);
+                            count += 6;
+                        }
+                    nSubs.Add((nSubs.Count != 0 ? nSubs[nSubs.Count - 1].start + nSubs[nSubs.Count - 1].count : 0, count));
+                }
+                var nm = new Mesh();
+                nm.name = "Intact" + instance.name;
+                nm.vertices = nVerts.ToArray();
+                nm.uv = nUV.ToArray();
+                nm.normals = nNorms.ToArray();
+                nm.tangents = nTangs.ToArray();
+                SetBoneWeights(nm, nBones);
+                nm.triangles = nTris.ToArray();
+                SetSubmeshes(nm, nSubs);
+                nm.bindposes = instance.bindposes;
+                nm.RecalculateBounds();
+
+                Disable = true;
+                var other = Get(nm);
+                Other = nm;
+                other.Other = instance;
+                other.IsGenerated = true;
+            }
+            finally
+            {
+                Disable = false;
+            }
+        }
+
+        static Vector3 Mirror(Vector3 v) => new Vector3(-v.x, v.y, v.z);
+        static Vector4 Mirror(Vector4 v) => new Vector4(-v.x, v.y, v.z, -v.w);
+
+        static List<List<BoneWeight1>> GetBoneWeights(Mesh mesh)
+        {
+            using (var all = mesh.GetAllBoneWeights())
+            using (var per = mesh.GetBonesPerVertex())
+            {
+                var r = new List<List<BoneWeight1>>();
+                var cur = 0;
+                foreach (var n in per)
+                {
+                    var l = new List<BoneWeight1>();
+                    r.Add(l);
+                    for (int o = 0; o < n; o++)
+                        l.Add(all[o + cur]);
+                    cur += n;
+                }
+                return r;
+            }
+        }
+
+        static void SetBoneWeights(Mesh mesh, List<List<BoneWeight1>> weights)
+        {
+            var per = new List<byte>();
+            var all = new List<BoneWeight1>();
+            foreach (var l in weights)
+            {
+                per.Add((byte)l.Count);
+                all.AddRange(l);
+            }
+            using (var per2 = new NativeArray<byte>(per.ToArray(), Allocator.Temp))
+            using (var all2 = new NativeArray<BoneWeight1>(all.ToArray(), Allocator.Temp))
+                mesh.SetBoneWeights(per2, all2);
+        }
+
+        static List<(int start, int count)> GetSubmeshes(Mesh mesh)
+        {
+            if (mesh.subMeshCount <= 0)
+                return new List<(int, int)>();
+            var l = new List<(int, int)>();
+            for (int i = 0; i < mesh.subMeshCount; i++)
+            {
+                var s = mesh.GetSubMesh(i);
+                l.Add((s.indexStart, s.indexCount));
+            }
+            return l;
+        }
+
+        static void SetSubmeshes(Mesh mesh, List<(int start, int count)> submeshes)
+        {
+            if (submeshes == null)
+                mesh.SetSubMeshes(new UnityEngine.Rendering.SubMeshDescriptor[0], ~UnityEngine.Rendering.MeshUpdateFlags.Default);
+            else
+                mesh.SetSubMeshes(submeshes.Select(x => new UnityEngine.Rendering.SubMeshDescriptor(x.start, x.count)).ToArray(), ~UnityEngine.Rendering.MeshUpdateFlags.Default);
+        }
+
+        public static void EnforceModel(RaisedPetData pet, IEnumerable<SkinnedMeshRenderer> renderers)
+        {
+            if (ShouldAffect(pet.PetTypeID))
+                foreach (var r in renderers)
+                    if (r && r.name == "NightFuryMesh" && r.sharedMesh)
+                    {
+                        var d = Get(r.sharedMesh);
+                        if (d.Other && ExtendedPetData.Get(pet).isIntact != d.IsGenerated)
+                    {
+                            r.sharedMesh = d.Other;
+                        }
+                    }
+        }
+
+        static int _nightfury;
+        public static bool ShouldAffect(int TypeId)
+        {
+            if (_nightfury == 0)
+                _nightfury = SanctuaryData.FindSanctuaryPetTypeInfo("NightFury")._TypeID;
+            return TypeId == _nightfury;
+        }
+    }
+
+    enum Side
+    {
+        Good,
+        Middle,
+        Bad
     }
 }

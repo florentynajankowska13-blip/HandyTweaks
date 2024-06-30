@@ -22,7 +22,7 @@ using BepInEx.Logging;
 
 namespace HandyTweaks
 {
-    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.5.5")]
+    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.5.6")]
     [BepInDependency("com.aidanamite.ConfigTweaks")]
     public class Main : BaseUnityPlugin
     {
@@ -621,7 +621,7 @@ namespace HandyTweaks
             {
                 var originalData = card.pSelectedPetData;
                 var petid = originalData.RaisedPetID;
-                var itemid = SanctuaryData.FindSanctuaryPetTypeInfo(originalData.PetTypeID)._IsUniquePet ? originalData.FindAttrData("TicketID")?.Value : null;
+                var itemid = originalData.FindAttrData("TicketID")?.Value;
                 if (itemid != null && int.TryParse(itemid, out var realId))
                 {
                     var count = 0;
@@ -2229,9 +2229,9 @@ namespace HandyTweaks
                 var tag = t;
                 this[tag].slider.onValueChanged.AddListener((x) => UpdateValue(tag, x));
                 if (tag == "H")
-                    this[tag].input.onValueChanged.AddListener((x) => UpdateValue(tag, int.TryParse(x, out var v) ? v / 360f : 0, true));
+                    this[tag].input.onValueChanged.AddListener((x) => UpdateValue(tag, long.TryParse(x, out var v) ? v / 360f : 0, true));
                 else
-                    this[tag].input.onValueChanged.AddListener((x) => UpdateValue(tag, int.TryParse(x, out var v) ? v / 255f : 0, true));
+                    this[tag].input.onValueChanged.AddListener((x) => UpdateValue(tag, long.TryParse(x, out var v) ? v / 255f : 0, true));
             }
         }
 

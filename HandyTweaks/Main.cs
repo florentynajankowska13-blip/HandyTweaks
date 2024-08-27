@@ -19,10 +19,11 @@ using BepInEx.Configuration;
 using UnityEngine.EventSystems;
 using Unity.Collections;
 using BepInEx.Logging;
+using System.IO;
 
 namespace HandyTweaks
 {
-    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.5.6")]
+    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.5.8")]
     [BepInDependency("com.aidanamite.ConfigTweaks")]
     public class Main : BaseUnityPlugin
     {
@@ -82,9 +83,14 @@ namespace HandyTweaks
         public static int UpdateCheckTimeout = 60;
         [ConfigField]
         public static int MaxConcurrentUpdateChecks = 4;
+        [ConfigField]
+        public static string OverrideBundleCacheLocation = "";
+        [ConfigField]
+        public static bool ClearBundleCache = false;
 
         public static Main instance;
         public static ManualLogSource logger;
+        public static ManualLogSource unityLogger;
         static List<(BaseUnityPlugin, string)> updatesFound = new List<(BaseUnityPlugin, string)>();
         static ConcurrentDictionary<WebRequest,bool> running = new ConcurrentDictionary<WebRequest, bool>();
         static int currentActive;
@@ -96,7 +102,14 @@ namespace HandyTweaks
         public void Awake()
         {
             instance = this;
-            logger = Logger;
+            unityLogger = BepInEx.Logging.Logger.CreateLogSource("Unity");
+            Application.logMessageReceived += (x, y, z) =>
+            {
+                if ((z == LogType.Error || z == LogType.Exception) && !x.StartsWith("[Error  :"))
+                    unityLogger.LogError(!string.IsNullOrWhiteSpace(y) ? x + '\n' + y : x);
+            };
+            Config.ConfigReloaded += OnConfigLoad;
+            OnConfigLoad();
             if (CheckForModUpdates)
             {
                 waitingUI = new GameObject("Waiting UI", typeof(RectTransform));
@@ -143,26 +156,91 @@ namespace HandyTweaks
             }
             new Harmony("com.aidanamite.HandyTweaks").PatchAll();
             Logger.LogInfo("Loaded");
-            Config.ConfigReloaded += (x, y) =>
-            {
-                if (!RemoveItemBuyLimits && Patch_SetStoreItemData.originalMaxes.Count != 0)
-                {
-                    foreach (var s in ItemStoreDataLoader.GetAllStores())
-                        foreach (var d in s._Items)
-                            if (Patch_SetStoreItemData.originalMaxes.TryGetValue(d.ItemID, out var orig))
-                                d.InventoryMax = orig;
-                    Patch_SetStoreItemData.originalMaxes.Clear();
-                }
-                else if (RemoveItemBuyLimits)
-                {
-                    foreach (var s in ItemStoreDataLoader.GetAllStores())
-                        Patch_SetStoreItemData.Postfix(s);
-                }
-                ColorPicker.TryUpdateSliderVisibility();
-            };
         }
 
-        
+        void OnConfigLoad(object sender = null, EventArgs args = null)
+        {
+            if (!RemoveItemBuyLimits && Patch_SetStoreItemData.originalMaxes.Count != 0)
+            {
+                foreach (var s in ItemStoreDataLoader.GetAllStores())
+                    foreach (var d in s._Items)
+                        if (Patch_SetStoreItemData.originalMaxes.TryGetValue(d.ItemID, out var orig))
+                            d.InventoryMax = orig;
+                Patch_SetStoreItemData.originalMaxes.Clear();
+            }
+            else if (RemoveItemBuyLimits)
+            {
+                foreach (var s in ItemStoreDataLoader.GetAllStores())
+                    Patch_SetStoreItemData.Postfix(s);
+            }
+            ColorPicker.TryUpdateSliderVisibility();
+            var prev = PlayerPrefs.GetString("AIDANAMITEHANDYTWEAKSMOD_PREVCACHE", "");
+            if (!PathEquals(prev, OverrideBundleCacheLocation))
+            {
+                if (!string.IsNullOrEmpty(OverrideBundleCacheLocation))
+                    ChangeCache(OverrideBundleCacheLocation);
+                if (!string.IsNullOrEmpty(prev))
+                {
+                    if (GetCache(prev,out var prevC,false))
+                        Caching.RemoveCache(prevC);
+                    try
+                    {
+                        if (Directory.Exists(prev))
+                            Directory.Delete(prev, true);
+                    }
+                    catch { }
+                }
+                PlayerPrefs.GetString("AIDANAMITEHANDYTWEAKSMOD_PREVCACHE", OverrideBundleCacheLocation);
+            }
+            if (ClearBundleCache)
+            {
+                Caching.ClearCache();
+                ClearBundleCache = false;
+                Config.Save();
+            }
+        }
+
+        public static void ChangeCache(string path)
+        {
+            if (!Directory.Exists(path))
+                Directory.CreateDirectory(path);
+            if (GetCache(path,out var cache))
+                Caching.currentCacheForWriting = cache;
+        }
+
+        public static bool GetCache(string path, out Cache cache, bool createIfMissing = true)
+        {
+            var c = Caching.cacheCount;
+            for (int i = 0; i < c; i++)
+            {
+                var c2 = Caching.GetCacheAt(i);
+                if (PathEquals(path, c2.path))
+                {
+                    cache = c2;
+                    return true;
+                }
+            }
+            if (createIfMissing)
+            {
+                cache = Caching.AddCache(path);
+                return true;
+            }
+            cache = default;
+            return false;
+        }
+
+        public static bool PathEquals(string a, string b) => string.Equals(GetFullPathSafe(a), GetFullPathSafe(b), StringComparison.OrdinalIgnoreCase);
+
+        public static string GetFullPathSafe(string path)
+        {
+            try
+            {
+                return new FileInfo(path).FullName;
+            } catch
+            {
+                return null;
+            }
+        }
 
         [MethodImpl(MethodImplOptions.Synchronized)]
         bool CanStartCheck()
@@ -2853,5 +2931,75 @@ namespace HandyTweaks
         Good,
         Middle,
         Bad
+    }
+
+    public class DragonFilterMenu : MonoBehaviour
+    {
+        static Transform prefabHolder;
+        static DragonFilterMenu prefab;
+        static DragonFilterItem prefabFilter;
+        static DragonOrderItem prefabOrder;
+        public static void SetPrefabs(GameObject main,GameObject filteritem, GameObject orderitem)
+        {
+            if (prefabHolder)
+                Destroy(prefabHolder.gameObject);
+            prefabHolder = new GameObject("PrefabHolder").transform;
+            prefabHolder.gameObject.SetActive(false);
+            DontDestroyOnLoad(prefabHolder.gameObject);
+            prefab = Instantiate(main, prefabHolder).AddComponent<DragonFilterMenu>();
+            prefabFilter = Instantiate(main, prefabHolder).AddComponent<DragonFilterItem>();
+            prefabOrder = Instantiate(main, prefabHolder).AddComponent<DragonOrderItem>();
+        }
+        public static void Include(string filter)
+        {
+
+        }
+        public static void Exclude(string filter)
+        {
+
+        }
+        public static void SetOrder(string order)
+        {
+
+        }
+
+        public Button OpenButton;
+        public GameObject Menu;
+        public Transform FilterGroup;
+        public Transform OrderGroup;
+        public Button EnableAll;
+        public Button DisableAll;
+
+    }
+    public class DragonFilterItem : MonoBehaviour
+    {
+        public Text Label;
+        public Image Icon;
+        public Toggle OnOff;
+        public string Filter;
+        void Awake()
+        {
+            OnOff.onValueChanged.AddListener(OnValueChanged);
+            OnValueChanged(OnOff);
+        }
+        void OnValueChanged(bool value)
+        {
+            if (value)
+                DragonFilterMenu.Include(Filter);
+            else
+                DragonFilterMenu.Exclude(Filter);
+        }
+    }
+    public class DragonOrderItem : MonoBehaviour, IPointerClickHandler
+    {
+        public Text Label;
+        public Image Ascending;
+        public Image Descending;
+        public string Order;
+
+        void IPointerClickHandler.OnPointerClick(PointerEventData eventData)
+        {
+            DragonFilterMenu.SetOrder(Order);
+        }
     }
 }

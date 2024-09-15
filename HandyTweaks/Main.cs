@@ -23,7 +23,7 @@ using System.IO;
 
 namespace HandyTweaks
 {
-    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.5.8")]
+    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.5.9")]
     [BepInDependency("com.aidanamite.ConfigTweaks")]
     public class Main : BaseUnityPlugin
     {
@@ -204,8 +204,8 @@ namespace HandyTweaks
         {
             if (!Directory.Exists(path))
                 Directory.CreateDirectory(path);
-            if (GetCache(path,out var cache))
-                Caching.currentCacheForWriting = cache;
+            GetCache(path, out var cache);
+            Caching.currentCacheForWriting = cache;
         }
 
         public static bool GetCache(string path, out Cache cache, bool createIfMissing = true)
@@ -1010,6 +1010,13 @@ namespace HandyTweaks
         public static string JoinValues(this Color c, string delimeter = "$") => (int)Math.Round(c.r * 255.0) + delimeter + (int)Math.Round(c.g * 255.0) + delimeter + (int)Math.Round(c.b * 255.0);
         public static T GetOrAddComponent<T>(this GameObject g) where T : Component => g.GetComponent<T>() ?? g.AddComponent<T>();
         public static Y GetValueOrDefault<X, Y>(this IReadOnlyDictionary<X, Y> d, X key) => d.TryGetValue(key, out var value) ? value : default;
+
+        public static T GetSafe<T>(this IList<T> l, int index, T fallback = default)
+        {
+            if (index < 0 || index > l.Count)
+                return fallback;
+            return l[index];
+        }
     }
     public enum StatCompareResult
     {
@@ -2773,7 +2780,7 @@ namespace HandyTweaks
                 var nVerts = new List<Vector3>(verts.Length * 2);
                 var nUV = new List<Vector2>(uv.Length * 2);
                 var nNorms = new List<Vector3>(norms.Length * 2);
-                var nTangs = new List<Vector4>(tangs.Length * 2);
+                var nTangs = tangs.Length == 0 ? null : new List<Vector4>(verts.Length * 2);
                 var nBones = new List<List<BoneWeight1>>(bones.Count * 2);
                 var indRemap = new Dictionary<int, int>();
                 for (int i = 0; i < verts.Length; i++)
@@ -2783,7 +2790,7 @@ namespace HandyTweaks
                         nVerts.Add(verts[i]);
                         nUV.Add(uv[i]);
                         nNorms.Add(norms[i]);
-                        nTangs.Add(tangs[i]);
+                        nTangs?.Add(tangs.GetSafe(i));
                         nBones.Add(bones[i]);
                         if (dup)
                         {
@@ -2791,7 +2798,7 @@ namespace HandyTweaks
                             nVerts.Add(Mirror(verts[i]));
                             nUV.Add(uv[i]);
                             nNorms.Add(Mirror(norms[i]));
-                            nTangs.Add(Mirror(tangs[i]));
+                            nTangs?.Add(Mirror(tangs.GetSafe(i)));
                             nBones.Add(bones[i].Select(x => new BoneWeight1() { boneIndex = mirrorBones.TryGetValue(x.boneIndex, out var y) ? y : x.boneIndex, weight = x.weight }).ToList());
                         }
                     }
@@ -2827,7 +2834,8 @@ namespace HandyTweaks
                 nm.vertices = nVerts.ToArray();
                 nm.uv = nUV.ToArray();
                 nm.normals = nNorms.ToArray();
-                nm.tangents = nTangs.ToArray();
+                if (nTangs != null)
+                    nm.tangents = nTangs.ToArray();
                 SetBoneWeights(nm, nBones);
                 nm.triangles = nTris.ToArray();
                 SetSubmeshes(nm, nSubs);

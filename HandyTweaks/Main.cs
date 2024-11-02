@@ -23,7 +23,7 @@ using System.IO;
 
 namespace HandyTweaks
 {
-    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.5.9")]
+    [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.5.10")]
     [BepInDependency("com.aidanamite.ConfigTweaks")]
     public class Main : BaseUnityPlugin
     {
@@ -77,6 +77,8 @@ namespace HandyTweaks
         public static ColorPickerMode CustomColorPickerMode = ColorPickerMode.RGBHSL;
         [ConfigField]
         public static bool RemoveItemBuyLimits = false;
+        //[ConfigField]
+        //public static bool ForceTextTagRendering = true;
         [ConfigField]
         public static bool CheckForModUpdates = true;
         [ConfigField]
@@ -198,6 +200,9 @@ namespace HandyTweaks
                 ClearBundleCache = false;
                 Config.Save();
             }
+            /*if (ForceTextTagRendering)
+                foreach (var lbl in FindObjectsOfType<UILabel>())
+                    Patch_ForceEnableEncoding.Prefix(lbl);*/
         }
 
         public static void ChangeCache(string path)
@@ -523,7 +528,7 @@ namespace HandyTweaks
 
         static Dictionary<string, (PetStatType, string, string)> FlightFieldToType = new Dictionary<string, (PetStatType, string, string)>
         {
-            { "_YawTurnRate",(PetStatType.TURNRATE,"TRN","") },
+            { "_RollTurnRate",(PetStatType.TURNRATE,"TRN","") },
             { "_PitchTurnRate",(PetStatType.PITCHRATE,"PCH", "") },
             { "_Acceleration",(PetStatType.ACCELERATION,"ACL", "") },
             { "_Speed",(PetStatType.MAXSPEED,"FSP", "Pet ") }
@@ -2940,6 +2945,26 @@ namespace HandyTweaks
         Middle,
         Bad
     }
+
+    /*[HarmonyPatch(typeof(UILabel))]
+    static class Patch_ForceEnableEncoding
+    {
+        [HarmonyPatch("OnEnable")]
+        public static void Prefix(UILabel __instance)
+        {
+            if (Main.ForceTextTagRendering)
+            {
+                __instance.supportEncoding = true;
+                __instance.symbolStyle = NGUIText.SymbolStyle.Colored;
+            }
+        }
+        [HarmonyPatch("set_supportEncoding")]
+        static void Prefix(ref bool value)
+        {
+            if (Main.ForceTextTagRendering)
+                value = true;
+        }
+    }*/
 
     public class DragonFilterMenu : MonoBehaviour
     {

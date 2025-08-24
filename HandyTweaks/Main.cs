@@ -1,4 +1,4 @@
-﻿using BepInEx;
+using BepInEx;
 using ConfigTweaks;
 using HarmonyLib;
 using System;
@@ -21,7 +21,7 @@ using Unity.Collections;
 using BepInEx.Logging;
 using System.IO;
 
-namespace HandyTweaks
+namespacem HandyTweaks
 {
     [BepInPlugin("com.aidanamite.HandyTweaks", "Handy Tweaks", "1.5.10")]
     [BepInDependency("com.aidanamite.ConfigTweaks")]
@@ -53,8 +53,10 @@ namespace HandyTweaks
         public static float ZoomSpeed = 1;
         [ConfigField]
         public static bool DisableDragonAutomaticSkinUnequip = true;
-        [ConfigField]
-        public static bool AllowCustomizingSpecialDragons = false;
+        [ConfigField] 
+        public static bool AllowCustomizingSpecialDragons = true;
+        
+        ;
         [ConfigField]
         public static int StableQuestChanceBoost = 0;
         [ConfigField]

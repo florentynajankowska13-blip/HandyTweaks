@@ -54,7 +54,7 @@ namespace HandyTweaks
         [ConfigField]
         public static bool DisableDragonAutomaticSkinUnequip = true;
         [ConfigField]
-        public static bool AllowCustomizingSpecialDragons = false;
+        public static bool AllowCustomizingSpecialDragons =true;
         [ConfigField]
         public static int StableQuestChanceBoost = 0;
         [ConfigField]
